@@ -57,7 +57,7 @@ def autopad(k, p=None, d=1):  # kernel, padding, dilation
 class Conv(nn.Module):
     """A standard Conv2D layer with batch normalization and optional activation for neural networks."""
 
-    default_act = nn.SiLU()  # default activation
+    default_act = nn.ReLU()  # default activation
 
     def __init__(self, c1, c2, k=1, s=1, p=None, g=1, d=1, act=True):
         """Initializes a standard Conv2D layer with batch normalization and optional activation; args are channel_in,
@@ -1073,3 +1073,24 @@ class Classify(nn.Module):
         if isinstance(x, list):
             x = torch.cat(x, 1)
         return self.linear(self.drop(self.pool(self.conv(x)).flatten(1)))
+
+class Bottleneck3(nn.Module):
+    """Implements a bottleneck layer with optional shortcut for efficient feature extraction in neural networks."""
+
+    def __init__(self, c1, c2, shortcut=True, g=1, e=0.5):  # ch_in, ch_out, shortcut, groups, expansion
+        """Initializes a standard bottleneck layer with optional shortcut; args: input channels (c1), output channels
+        (c2), shortcut (bool), groups (g), expansion factor (e).
+        """
+        super().__init__()
+        c_ = int(c2 * 6)  # hidden channels
+        self.cv1 = Conv(c1, c_, 1, 1)
+        self.cv2 = DWConv(c_, c_, 3, 1)
+        self.cv3 = Conv(c_, c2, 1, 1)
+        
+        self.add = shortcut and c1 == c2
+
+    def forward(self, x):
+        """Executes forward pass, performing convolutional ops and optional shortcut addition; expects input tensor
+        x.
+        """
+        return x + self.cv3(self.cv2(self.cv1(x))) if self.add else self.cv3(self.cv2(self.cv1(x)))

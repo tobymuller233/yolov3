@@ -35,6 +35,8 @@ data/images/*
 !data/images/bus.jpg
 !data/*.sh
 
+datasets/*
+
 results*.csv
 
 # Datasets -------------------------------------------------------------------------------------------------------------
@@ -255,3 +257,6 @@ com_crashlytics_export_strings.xml
 crashlytics.properties
 crashlytics-build.properties
 fabric.properties
+
+# vscode
+.vscode/
