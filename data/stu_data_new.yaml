@@ -1,0 +1,8 @@
+path: ./datasets
+train:
+  - stu_data_new/images
+val:
+  - SCUT_HEAD_A/SCUT_HEAD_A/val/images
+
+names:
+  0: head
