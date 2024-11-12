@@ -141,15 +141,21 @@ class BaseModel(nn.Module):
     def _forward_once(self, x, profile=False, visualize=False):
         """Executes a single inference or training step, offering profiling and visualization options for input `x`."""
         y, dt = [], []  # outputs
+        # i = 0
+        # fp = open("log3.txt", "w")
         for m in self.model:
             if m.f != -1:  # if not from previous layer
                 x = y[m.f] if isinstance(m.f, int) else [x if j == -1 else y[j] for j in m.f]  # from earlier layers
             if profile:
                 self._profile_one_layer(m, x, dt)
             x = m(x)  # run
+            # if not isinstance(x, tuple):
+            #     fp.write(f"Layer {i}: {x.shape}\n")
+            # i += 1
             y.append(x if m.i in self.save else None)  # save output
             if visualize:
                 feature_visualization(x, m.type, m.i, save_dir=visualize)
+        # fp.close()
         return x
 
     def _profile_one_layer(self, m, x, dt):
@@ -351,6 +357,7 @@ def parse_model(d, ch):  # model_dict, input_channels(3)
         LOGGER.info(f"{colorstr('activation:')} {act}")  # print
     na = (len(anchors[0]) // 2) if isinstance(anchors, list) else anchors  # number of anchors
     no = na * (nc + 5)  # number of outputs = anchors * (classes + 5)
+    print(f"no: {no}; na: {na}; nc: {nc}")
 
     layers, save, c2 = [], [], ch[-1]  # layers, savelist, ch out
     for i, (f, n, m, args) in enumerate(d["backbone"] + d["head"]):  # from, number, module, args

@@ -1,0 +1,9 @@
+path: ./datasets/cctv
+train:
+  - train/images
+  - valid/images
+val:
+  - test/images
+
+names:
+  0: head
