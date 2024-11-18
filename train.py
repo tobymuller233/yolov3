@@ -24,6 +24,7 @@ import time
 from copy import deepcopy
 from datetime import datetime
 from pathlib import Path
+import torch_pruning as tp
 
 try:
     import comet_ml  # must be imported before torch (if installed)
@@ -371,9 +372,29 @@ def train(hyp, opt, device, callbacks):  # hyp is path/to/hyp.yaml or hyp dictio
             m.reset_running_stats()
             m.reset_parameters()
     
+    if opt.sparse:
+        imp = tp.importance.BNScaleImportance()
+        example_inputs = torch.randn(opt.batch, 3, opt.img, opt.img)  # dummy input
+        ignored_layers = [model.model[27], model.model[33], model.model[39], model.model[40]]
+        iterative_steps = 10
+        pruner = tp.pruner.BNScalePruner(
+            model,
+            example_inputs,
+            imp,
+            ignored_layers=ignored_layers,
+            iterative_steps=iterative_steps,
+            ch_sparsity=0.2,
+            isomorphic=True,
+            global_pruning=True
+        )
+
+        pass
+
     for epoch in range(start_epoch, epochs):  # epoch ------------------------------------------------------------------
         callbacks.run("on_train_epoch_start")
         model.train()
+        if opt.sparse:
+            pruner.update_regularizer()
 
         # Update image weights (optional, single-GPU only)
         if opt.image_weights:
@@ -458,6 +479,9 @@ def train(hyp, opt, device, callbacks):  # hyp is path/to/hyp.yaml or hyp dictio
         # Scheduler
         lr = [x["lr"] for x in optimizer.param_groups]  # for loggers
         scheduler.step()
+
+        if opt.sparse:
+            pruner.regularize(model)
 
         if RANK in {-1, 0}:
             # mAP
@@ -612,6 +636,7 @@ def parse_opt(known=False):
     parser.add_argument("--save-period", type=int, default=-1, help="Save checkpoint every x epochs (disabled if < 1)")
     parser.add_argument("--seed", type=int, default=0, help="Global training seed")
     parser.add_argument("--local_rank", type=int, default=-1, help="Automatic DDP Multi-GPU argument, do not modify")
+    parser.add_argument("--sparse", action="store_true", help="Sparse weights for training")
 
     # Logger arguments
     parser.add_argument("--entity", default=None, help="Entity")
