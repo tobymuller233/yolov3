@@ -149,10 +149,12 @@ class BaseModel(nn.Module):
             if profile:
                 self._profile_one_layer(m, x, dt)
             x = m(x)  # run
-            if not isinstance(x, list):
-                print(f"Layer input stats: min={x.min().item()}, max={x.max().item()}, mean={x.mean().item()}")
-                if torch.isnan(x).any():
-                    print(f"NaN detected! {m._get_name()}")   # output module name
+            if isinstance(x, torch.Tensor) and torch.isnan(x).any():
+                print("", end="")
+            # if not isinstance(x, list):
+            #     print(f"Layer input stats: min={x.min().item()}, max={x.max().item()}, mean={x.mean().item()}")
+            #     if torch.isnan(x).any():
+            #         print(f"NaN detected! {m._get_name()}")   # output module name
             # if not isinstance(x, tuple):
             #     fp.write(f"Layer {i}: {x.shape}\n")
             # i += 1
@@ -394,7 +396,7 @@ def parse_model(d, ch):  # model_dict, input_channels(3)
         }:
             c1, c2 = ch[f], args[0]
             if c2 != no:  # if not output
-                c2 = make_divisible(c2 * gw, 1)
+                c2 = make_divisible(c2 * gw, 8)
 
             args = [c1, c2, *args[1:]]
             if m in {BottleneckCSP, C3, C3TR, C3Ghost, C3x}:

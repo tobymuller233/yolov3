@@ -72,10 +72,15 @@ class Conv(nn.Module):
         """Applies convolution, batch normalization, and activation to input `x`; `x` shape: [N, C_in, H, W] -> [N,
         C_out, H_out, W_out].
         """
-        with torch.no_grad():
-            if torch.isnan(self.act(self.bn(self.conv(x)))).any():
-                print("", end="")
-        return self.act(self.bn(self.conv(x)))
+        # with torch.no_grad():
+        #     if torch.isnan(self.act(self.bn(self.conv(x)))).any():
+        #         print("", end="")
+        ret = self.act(self.bn(self.conv(x)))
+        if torch.isnan(ret).any():
+            print("", end="")
+        ret = torch.clamp(ret, min=-1e3, max=1e3)
+        # return self.act(self.bn(self.conv(x)))
+        return ret
 
     def forward_fuse(self, x):
         """Applies fused convolution and activation to input `x`; input shape: [N, C_in, H, W] -> [N, C_out, H_out,
