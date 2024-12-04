@@ -6,7 +6,8 @@ from models.yolo import Bottleneck3
 from torchvision.models import resnet18
 from datetime import datetime
 
-weights = "weights/model_plus_final.pt"
+weights = "runs/train/model_plus_A_B/exp26/weights/best.pt"
+# weights = "weights/pruned_model_plus_20_v1.pt"
 model1 = torch.load(weights)
 model = attempt_load(weights)
 model.requires_grad_(True)
@@ -14,26 +15,40 @@ model.requires_grad_(True)
 # model = torch.load(weights)
 # f = open("model.txt", "w")
 # f.write(str(model))
-#print(model)
+print(model)
 # for m in model.modules():
 # 	if isinstance(m, Detect):
 # 		print(m)
 
 # 1. importance measure
 imp = tp.importance.MagnitudeImportance(p=2)
+# imp = tp.importance.BNScaleImportance()
 # imp = tp.importance.GroupNormImportance()
 example_inputs = torch.randn(1, 3, 640, 640) # dummy input
 # 2. layers to be ignored
 ignored_layers = [model.model[27], model.model[33], model.model[39], model.model[40]]
+for m in model.modules():
+    if isinstance(m, Bottleneck3):
+        ignored_layers.append(m)
 # 3. init pruner
 iterative_steps = 10
-pruner = tp.pruner.MetaPruner(
+# pruner = tp.pruner.MetaPruner(
+#     model,
+#     example_inputs, 
+#     importance=imp, 
+#     iterative_steps=iterative_steps, 
+#     ch_sparsity=0.2, 
+#     ignored_layers=ignored_layers, 
+#     isomorphic=True,
+#     global_pruning=True
+# )
+pruner = tp.pruner.BNScalePruner(
     model,
-    example_inputs, 
-    importance=imp, 
-    iterative_steps=iterative_steps, 
-    ch_sparsity=0.2, 
-    ignored_layers=ignored_layers, 
+    example_inputs,
+    importance=imp,
+    iterative_steps=iterative_steps,
+    ch_sparsity=0.3,
+    ignored_layers=ignored_layers,
     isomorphic=True,
     global_pruning=True
 )
@@ -56,7 +71,7 @@ for item, value in model1.items():
         result[item] = value
 
 print(model)
-torch.save(result, "weights/pruned_model_plus_20.pt")
+torch.save(result, "weights/pruned_BN_model_plus_30.pt")
 # fp = open("pruned_model3.txt", "w")
 # fp.write(str(model))
 # for i in range(iterative_steps):

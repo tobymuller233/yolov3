@@ -375,7 +375,12 @@ def train(hyp, opt, device, callbacks):  # hyp is path/to/hyp.yaml or hyp dictio
             # m.eval()
     
     if opt.sparse:
-        imp = tp.importance.GroupNormImportance(p=2)
+        if opt.sparse == "group":
+            imp = tp.importance.GroupNormImportance(p=2)
+        elif opt.sparse == "batch":
+            imp = tp.importance.BNScaleImportance()
+        else:
+            raise ValueError(f"Unknown sparse option: {opt.sparse}")
         example_inputs = torch.randn(opt.batch_size, 3, opt.imgsz, opt.imgsz).to(device)  # dummy input
         if torch.cuda.device_count() > 1:
             ignored_layers = [model.module.model[27], model.module.model[33], model.module.model[39], model.module.model[40]]
@@ -388,16 +393,28 @@ def train(hyp, opt, device, callbacks):  # hyp is path/to/hyp.yaml or hyp dictio
                 if isinstance(m, Bottleneck3):
                     ignored_layers.append(m)
         iterative_steps = 1
-        pruner = tp.pruner.GroupNormPruner(
-            model,
-            example_inputs,
-            imp,
-            ignored_layers=ignored_layers,
-            iterative_steps=iterative_steps,
-            ch_sparsity=0.2,
-            isomorphic=True,
-            global_pruning=True
-        )
+        if opt.sparse == "group":
+            pruner = tp.pruner.GroupNormPruner(
+                model,
+                example_inputs,
+                imp,
+                ignored_layers=ignored_layers,
+                iterative_steps=iterative_steps,
+                ch_sparsity=0.3,
+                isomorphic=True,
+                global_pruning=True
+            )
+        elif opt.sparse == "batch":
+            pruner = tp.pruner.BNScalePruner(
+                model,
+                example_inputs,
+                imp,
+                ignored_layers=ignored_layers,
+                iterative_steps=iterative_steps,
+                ch_sparsity=0.3,
+                isomorphic=True,
+                global_pruning=True
+            )
 
     for epoch in range(start_epoch, epochs):  # epoch ------------------------------------------------------------------
         callbacks.run("on_train_epoch_start")
@@ -647,7 +664,7 @@ def parse_opt(known=False):
     parser.add_argument("--save-period", type=int, default=-1, help="Save checkpoint every x epochs (disabled if < 1)")
     parser.add_argument("--seed", type=int, default=0, help="Global training seed")
     parser.add_argument("--local_rank", type=int, default=-1, help="Automatic DDP Multi-GPU argument, do not modify")
-    parser.add_argument("--sparse", type=str, default="group", action="store_true", help="Sparse weights for training.(group for GroupNorm, batch for BN)")
+    parser.add_argument("--sparse", type=str, default=None, help="Sparse weights for training.(group for GroupNorm, batch for BN)")
 
     # Logger arguments
     parser.add_argument("--entity", default=None, help="Entity")
