@@ -6,8 +6,8 @@ from models.yolo import Bottleneck3
 from torchvision.models import resnet18
 from datetime import datetime
 
-weights = "runs/train/model_plus_A_B/exp26/weights/best.pt"
-# weights = "weights/pruned_model_plus_20_v1.pt"
+# weights = "runs/train/model_plus_A_B/exp26/weights/best.pt"
+weights = "weights/pruned_model_plus_20_v1.pt"
 model1 = torch.load(weights)
 model = attempt_load(weights)
 model.requires_grad_(True)

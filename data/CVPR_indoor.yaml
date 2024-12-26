@@ -1,0 +1,10 @@
+path: ./datasets
+train:
+  - indoorCVPR_stu_motion/train/images
+  - stu_data_2/train/images
+
+val:
+  - indoorCVPR_stu_motion/val/images 
+
+names:
+  0: head

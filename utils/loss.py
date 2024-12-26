@@ -138,7 +138,7 @@ class ComputeLoss:
         self.anchors = m.anchors
         self.device = device
 
-    def __call__(self, p, targets):  # predictions, targets
+    def __call__(self, p, targets, dynamic_weight=False):  # predictions, targets
         """Computes loss given predictions and targets, returning class, box, and object loss as tensors."""
         lcls = torch.zeros(1, device=self.device)  # class loss
         lbox = torch.zeros(1, device=self.device)  # box loss
@@ -160,7 +160,16 @@ class ComputeLoss:
                 pwh = (pwh.sigmoid() * 2) ** 2 * anchors[i]
                 pbox = torch.cat((pxy, pwh), 1)  # predicted box
                 iou = bbox_iou(pbox, tbox[i], CIoU=True).squeeze()  # iou(prediction, target)
-                lbox += (1.0 - iou).mean()  # iou loss
+                
+                # Dynamic weights
+                # init area_weights
+                area_weights = torch.ones(tbox[i][:, 0].shape, device=self.device)
+                if dynamic_weight:
+                    t_areas = tbox[i][:, 2] * tbox[i][:, 3]  # Calculate target areas (w * h)
+                    area_weights = 1.0 / (t_areas + 1e-6)  # Smaller area -> Higher weight
+                    area_weights = area_weights / area_weights.mean()  # Normalize weights
+                
+                lbox += ((1.0 - iou) * area_weights).mean()  # iou loss
 
                 # Objectness
                 iou = iou.detach().clamp(0).type(tobj.dtype)

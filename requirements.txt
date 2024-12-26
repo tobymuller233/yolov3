@@ -47,3 +47,15 @@ setuptools>=70.0.0 # Snyk vulnerability fix
 # mss  # screenshots
 # albumentations>=1.0.3
 # pycocotools>=2.0.6  # COCO mAP
+
+# neumeta
+prettytable
+fast-tsp
+torch-pruning
+timm
+omegaconf
+scikit-learn
+wandb
+opencv-python
+albumentations[imgaug]
+segmentation_models_pytorch

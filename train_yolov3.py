@@ -1,17 +1,7 @@
 # Ultralytics YOLOv3 🚀, AGPL-3.0 license
 """
-Train a YOLOv3 model on a custom dataset. Models and datasets download automatically from the latest YOLOv3 release.
+Train a NeuralMeta Network for YOLOv3 model on a custom dataset. Models and datasets download automatically from the latest YOLOv3 release.
 
-Usage - Single-GPU training:
-    $ python train.py --data coco128.yaml --weights yolov5s.pt --img 640  # from pretrained (recommended)
-    $ python train.py --data coco128.yaml --weights '' --cfg yolov5s.yaml --img 640  # from scratch
-
-Usage - Multi-GPU DDP training:
-    $ python -m torch.distributed.run --nproc_per_node 4 --master_port 1 train.py --data coco128.yaml --weights yolov5s.pt --img 640 --device 0,1,2,3
-
-Models:     https://github.com/ultralytics/yolov5/tree/master/models
-Datasets:   https://github.com/ultralytics/yolov5/tree/master/data
-Tutorial:   https://docs.ultralytics.com/yolov5/tutorials/train_custom_data
 """
 
 import argparse
@@ -26,11 +16,6 @@ from datetime import datetime
 from pathlib import Path
 import torch_pruning as tp
 from models.common import Bottleneck3
-
-try:
-    import comet_ml  # must be imported before torch (if installed)
-except ImportError:
-    comet_ml = None
 
 import numpy as np
 import torch

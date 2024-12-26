@@ -219,6 +219,7 @@ def run(
     plots=True,
     callbacks=Callbacks(),
     compute_loss=None,
+    dynamic_weight=False
 ):
     """
     Validates a trained YOLO model on a dataset and saves detection results in specified formats.
@@ -363,7 +364,7 @@ def run(
 
         # Loss
         if compute_loss:
-            loss += compute_loss(train_out, targets)[1]  # box, obj, cls
+            loss += compute_loss(train_out, targets, dynamic_weight)[1]  # box, obj, cls
 
         # NMS
         targets[:, 2:] *= torch.tensor((width, height, width, height), device=device)  # to pixels
