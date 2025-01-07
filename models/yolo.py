@@ -208,8 +208,17 @@ class BaseModel(nn.Module):
 class DetectionModel(BaseModel):
     """YOLOv3 detection model class for initializing and processing detection models with configurable parameters."""
 
-    def __init__(self, cfg="yolov5s.yaml", ch=3, nc=None, anchors=None, log=True, inr=False):  # model, input channels, number of classes
+    def __init__(self, cfg="yolov5s.yaml", ch=3, nc=None, anchors=None, log=True, inr=False, change_layers=None):  # model, input channels, number of classes
         """Initializes YOLOv3 detection model with configurable YAML, input channels, classes, and anchors."""
+        """
+        :param cfg: model dict or *.yaml file path
+        :param ch: input channels
+        :param nc: number of classes
+        :param anchors: anchor sizes
+        :param log: logging
+        :param inr: neumeta
+        :param change_layers: a dict of layer indices and new output channels
+        """
         super().__init__()
         if isinstance(cfg, dict):
             self.yaml = cfg  # model dict
@@ -228,7 +237,7 @@ class DetectionModel(BaseModel):
         if anchors:
             LOGGER.info(f"Overriding model.yaml anchors with anchors={anchors}")
             self.yaml["anchors"] = round(anchors)  # override yaml value
-        self.model, self.save = parse_model(deepcopy(self.yaml), ch=[ch], log=log, inr=inr)  # model, savelist
+        self.model, self.save = parse_model(deepcopy(self.yaml), ch=[ch], log=log, inr=inr, change_layers=change_layers)  # model, savelist
         self.names = [str(i) for i in range(self.yaml["nc"])]  # default names
         self.inplace = self.yaml.get("inplace", True)
 
@@ -359,7 +368,7 @@ class ClassificationModel(BaseModel):
         self.model = None
 
 
-def parse_model(d, ch, log=True, inr=False):  # model_dict, input_channels(3)
+def parse_model(d, ch, log=True, inr=False, change_layers=None):  # model_dict, input_channels(3)
     """Parses a YOLOv3 model configuration from a dictionary and constructs the model."""
     if log:
         LOGGER.info(f"\n{'':>3}{'from':>18}{'n':>3}{'params':>10}  {'module':<40}{'arguments':<30}")

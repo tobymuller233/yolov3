@@ -3,6 +3,7 @@ import torch.nn as nn
 import os
 
 from models.yolo import Model
+from models.common import Conv, DWConv
 from utils.torch_utils import (
     EarlyStopping,
     ModelEMA,
@@ -65,7 +66,7 @@ def initialize_wandb(opt):
     import time
     run_name = f"{time.strftime('%Y%m%d%H%M%S')}-{opt.experiment.name}"
     
-    wandb.init(project="ninr_yolov3", name=run_name, config=dict(opt), group='yoloface500k')
+    wandb.init(project="ninr_yolov3", name=run_name, config=vars(opt), group='yoloface500k')
 
 def init_model_dict(opt, LOCAL_RANK, device="cpu"):
     """
@@ -80,9 +81,10 @@ def init_model_dict(opt, LOCAL_RANK, device="cpu"):
     """
     dim_dict = {}
     gt_model_dict = {}
+    change_layers = {""}
     for dim in opt.dimensions.range:
         # Create a model for the given dimension
-        model_cls = create_model("yoloface500k", LOCAL_RANK, opt, device, hidden_dim=dim, path=opt.model.pretrained_path).to(opt.device)
+        model_cls = create_model("yoloface500k", LOCAL_RANK, opt, device, hidden_dim=dim, path=opt.model.pretrained_path, change_layers=not None).to(device)
 
         # Sample the coordinates, keys, indices, and size for the model
         coords_tensor, keys_list, indices_list, size_list = sample_coordinates(model_cls)
@@ -100,17 +102,17 @@ def init_model_dict(opt, LOCAL_RANK, device="cpu"):
             gt_model_dict[f"{dim}"] = model_trained
     return dim_dict, gt_model_dict
 
-def create_model(model_name, LOCAL_RANK, opt, device, hidden_dim=240, path=None, smooth=None):
+def create_model(model_name, LOCAL_RANK, opt, device, hidden_dim=240, path=None, smooth=None, change_layers=None):
     hyp = opt.hyp
     if model_name == "yoloface500k":
-        model = create_model_yolov3(LOCAL_RANK, device, opt, hyp, hidden_dim=hidden_dim, path=path, smooth=smooth)
+        model = create_model_yolov3(LOCAL_RANK, device, opt, hyp, hidden_dim=hidden_dim, path=path, smooth=smooth, change_layers=change_layers)
     else:
         raise ValueError(f"Unsupported model: {model_name}")
 
     return model
 
 # the modified model of yoloface500kp.yaml
-def create_model_yolov3(LOCAL_RANK, device, opt, hyp, hidden_dim=240, path=None, smooth=None):
+def create_model_yolov3(LOCAL_RANK, device, opt, hyp, hidden_dim=240, path=None, smooth=None, change_layers=None):
     """
     Create a model based on the specified name.
 
@@ -120,6 +122,7 @@ def create_model_yolov3(LOCAL_RANK, device, opt, hyp, hidden_dim=240, path=None,
     :param device: The device to use for the model.
     :param LOCAL_RANK: The local rank of the process.
     :param smooth: The smoothing factor to use for the model.
+    :param change_layers: The layers to change in the model.(currently it's a str)
     :return: The initialized model.
     """
     if path:
@@ -127,11 +130,15 @@ def create_model_yolov3(LOCAL_RANK, device, opt, hyp, hidden_dim=240, path=None,
         with torch_distributed_zero_first(LOCAL_RANK):
             weights = attempt_download(path)
         ckpt = torch.load(weights, map_location="cpu")  # load
-        model = Model(opt.cfg or ckpt["model"].yaml, ch=3, nc=1, anchors=hyp.get("anchors")).to(device) # yoloface500k.yaml
+        model = Model(opt.cfg or ckpt["model"].yaml, ch=3, nc=1, anchors=hyp.get("anchors"), change_layers=change_layers).to(device) # yoloface500k.yaml
         exclude = ["anchor"] if (opt.cfg or hyp.get("anchors")) else []  # exclude keys
         csd = ckpt["model"].float().state_dict()  # checkpoint state_dict as FP32
         # csd = intersect_dicts(csd, model.state_dict(), exclude=exclude)  # intersect
         # model.load_state_dict(csd, strict=False)  # load
+        if change_layers:
+            model.model[21][1].cv1 = Conv(model.model[21][1].cv1.conv.in_channels, hidden_dim, 1, 1)
+            model.model[21][1].cv2 = DWConv(hidden_dim, hidden_dim, 3, 1)
+            model.model[21][1].cv3 = Conv(hidden_dim, model.model[21][1].cv3.conv.out_channels, 1, 1)
         model.model = load_checkpoint(model.model, csd, prefix="model.")  # load
         LOGGER.info(f"Transferred {len(csd)}/{len(ckpt['model'].float().state_dict())} items from {weights}")
     else:

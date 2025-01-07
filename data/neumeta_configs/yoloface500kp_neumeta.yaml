@@ -11,7 +11,7 @@ experiment:
 model:
   type: ResNet18
   pretrained_path: weights/model_plus_final.pt # Path to pre-trained model
-  smooth: True  # Use smooth model
+  smooth: False # Use smooth model
 
 # Training configurations
 training:
@@ -34,7 +34,8 @@ hyper_model:
 
 # Experiment dimensions configuration
 dimensions:
-  range: [512]  # Dimension range for the experiment
+  range: [100, 240]  # Dimension range for the experiment
+  interval: 10  # Interval between dimensions
   test: 512  # Testing dimension
   norm: 512  # Normalization factor
-  start: 512  # Starting dimension
+  start: 240  # Starting dimension

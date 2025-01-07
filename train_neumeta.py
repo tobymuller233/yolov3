@@ -601,7 +601,7 @@ def train_neumeta(hyp, opt, device, callbacks): # hyp is path/to/hyp.yaml or hyp
     # hypernet
     hyper_model = get_hypernet(opt, number_param, device)
     # initialize EMA
-    ema = EMA(hyper_model, decay=opt.hyper_model.ema_decaty)
+    ema = EMA(hyper_model, decay=opt.hyper_model.ema_decay)
     # Get the criterion, validation criterion, optimizer, and scheduler
     criterion, val_criterion, optimizer, scheduler = get_optimizer(opt, hyper_model)
 
