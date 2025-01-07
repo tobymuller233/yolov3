@@ -80,6 +80,19 @@ from utils.torch_utils import (
     smart_resume,
     torch_distributed_zero_first,
 )
+from utils.neumeta import create_model_yolov3, initialize_wandb, init_model_dict, print_namespace
+
+# neumeta
+import wandb
+from neumeta.utils import (AverageMeter, EMA, load_checkpoint, print_omegaconf, 
+                       sample_coordinates, sample_merge_model, 
+                       sample_subset, sample_weights, save_checkpoint, 
+                       set_seed, shuffle_coordiates_all, sample_single_model,
+                       validate_single, get_cifar10, 
+                       get_hypernet, get_optimizer, 
+                       parse_args, 
+                       weighted_regression_loss)
+from omegaconf import OmegaConf
 
 LOCAL_RANK = int(os.getenv("LOCAL_RANK", -1))  # https://pytorch.org/docs/stable/elastic/run.html
 RANK = int(os.getenv("RANK", -1))
@@ -136,16 +149,14 @@ def train(hyp, opt, device, callbacks):  # hyp is path/to/hyp.yaml or hyp dictio
         train(hyp='hyp.scratch.yaml', opt=args, device=device, callbacks=callbacks)
         ```
     """
-    save_dir, epochs, batch_size, weights, single_cls, evolve, data, cfg, resume, noval, nosave, workers, freeze = (
+    save_dir, epochs, batch_size, weights, single_cls, data, cfg, noval, nosave, workers, freeze = (
         Path(opt.save_dir),
         opt.epochs,
         opt.batch_size,
         opt.weights,
         opt.single_cls,
-        opt.evolve,
         opt.data,
         opt.cfg,
-        opt.resume,
         opt.noval,
         opt.nosave,
         opt.workers,
@@ -155,7 +166,7 @@ def train(hyp, opt, device, callbacks):  # hyp is path/to/hyp.yaml or hyp dictio
 
     # Directories
     w = save_dir / "weights"  # weights dir
-    (w.parent if evolve else w).mkdir(parents=True, exist_ok=True)  # make dir
+    (w).mkdir(parents=True, exist_ok=True)  # make dir
     last, best = w / "last.pt", w / "best.pt"
 
     # Hyperparameters
@@ -166,9 +177,9 @@ def train(hyp, opt, device, callbacks):  # hyp is path/to/hyp.yaml or hyp dictio
     opt.hyp = hyp.copy()  # for saving hyps to checkpoints
 
     # Save run settings
-    if not evolve:
-        yaml_save(save_dir / "hyp.yaml", hyp)
-        yaml_save(save_dir / "opt.yaml", vars(opt))
+    # if not evolve:
+    # yaml_save(save_dir / "hyp.yaml", hyp)
+    # yaml_save(save_dir / "opt.yaml", vars(opt))
 
     # Loggers
     data_dict = None
@@ -181,11 +192,12 @@ def train(hyp, opt, device, callbacks):  # hyp is path/to/hyp.yaml or hyp dictio
 
         # Process custom dataset artifact link
         data_dict = loggers.remote_dataset
-        if resume:  # If resuming runs from remote artifact
-            weights, epochs, hyp, batch_size = opt.weights, opt.epochs, opt.hyp, opt.batch_size
+        # if resume:  # If resuming runs from remote artifact
+        #     weights, epochs, hyp, batch_size = opt.weights, opt.epochs, opt.hyp, opt.batch_size
 
     # Config
-    plots = not evolve and not opt.noplots  # create plots
+    # plots = not evolve and not opt.noplots  # create plots
+    plots = not opt.noplots  # create plots
     cuda = device.type != "cpu"
     init_seeds(opt.seed + 1 + RANK, deterministic=True)
     with torch_distributed_zero_first(LOCAL_RANK):
@@ -203,7 +215,8 @@ def train(hyp, opt, device, callbacks):  # hyp is path/to/hyp.yaml or hyp dictio
             weights = attempt_download(weights)  # download if not found locally
         ckpt = torch.load(weights, map_location="cpu")  # load checkpoint to CPU to avoid CUDA memory leak
         model = Model(cfg or ckpt["model"].yaml, ch=3, nc=nc, anchors=hyp.get("anchors")).to(device)  # create
-        exclude = ["anchor"] if (cfg or hyp.get("anchors")) and not resume else []  # exclude keys
+        # exclude = ["anchor"] if (cfg or hyp.get("anchors")) and not resume else []  # exclude keys
+        exclude = ["anchor"] if (cfg or hyp.get("anchors")) else []  # exclude keys
         csd = ckpt["model"].float().state_dict()  # checkpoint state_dict as FP32
         csd = intersect_dicts(csd, model.state_dict(), exclude=exclude)  # intersect
         model.load_state_dict(csd, strict=False)  # load
@@ -253,8 +266,8 @@ def train(hyp, opt, device, callbacks):  # hyp is path/to/hyp.yaml or hyp dictio
     # Resume
     best_fitness, start_epoch = 0.0, 0
     if pretrained:
-        if resume:
-            best_fitness, start_epoch, epochs = smart_resume(ckpt, optimizer, ema, weights, epochs, resume)
+        # if resume:
+        #     best_fitness, start_epoch, epochs = smart_resume(ckpt, optimizer, ema, weights, epochs, resume)
         del ckpt, csd
 
     # DP mode
@@ -310,12 +323,12 @@ def train(hyp, opt, device, callbacks):  # hyp is path/to/hyp.yaml or hyp dictio
             prefix=colorstr("val: "),
         )[0]
 
-        if not resume:
-            if not opt.noautoanchor:
-                check_anchors(dataset, model=model, thr=hyp["anchor_t"], imgsz=imgsz)  # run AutoAnchor
-            model.half().float()  # pre-reduce anchor precision
+        # if not resume:
+        if not opt.noautoanchor:
+            check_anchors(dataset, model=model, thr=hyp["anchor_t"], imgsz=imgsz)  # run AutoAnchor
+        model.half().float()  # pre-reduce anchor precision
 
-        callbacks.run("on_pretrain_routine_end", labels, names)
+        callbacks.run("on_pretrain_ro, opt, hyp, path=utine_end", labels, names)
 
     # DDP mode
     if cuda and RANK != -1:
@@ -352,60 +365,9 @@ def train(hyp, opt, device, callbacks):  # hyp is path/to/hyp.yaml or hyp dictio
         f'Starting training for {epochs} epochs...'
     )
 
-    # reset BN layers
-    # for m in model.modules():
-        # if isinstance(m, nn.BatchNorm2d):
-            # m.reset_running_stats()
-            # m.reset_parameters()
-            # m.eval()
-    
-    if opt.sparse:
-        if opt.sparse == "group":
-            imp = tp.importance.GroupNormImportance(p=2)
-        elif opt.sparse == "batch":
-            imp = tp.importance.BNScaleImportance()
-        else:
-            raise ValueError(f"Unknown sparse option: {opt.sparse}")
-        example_inputs = torch.randn(opt.batch_size, 3, opt.imgsz, opt.imgsz).to(device)  # dummy input
-        if torch.cuda.device_count() > 1:
-            ignored_layers = [model.module.model[27], model.module.model[33], model.module.model[39], model.module.model[40]]
-            for m in model.module.modules():
-                if isinstance(m, Bottleneck3):
-                    ignored_layers.append(m)
-        else:
-            ignored_layers = [model.model[27], model.model[33], model.model[39], model.model[40]]
-            for m in model.modules():
-                if isinstance(m, Bottleneck3):
-                    ignored_layers.append(m)
-        iterative_steps = 1
-        if opt.sparse == "group":
-            pruner = tp.pruner.GroupNormPruner(
-                model,
-                example_inputs,
-                imp,
-                ignored_layers=ignored_layers,
-                iterative_steps=iterative_steps,
-                ch_sparsity=0.3,
-                isomorphic=True,
-                global_pruning=True
-            )
-        elif opt.sparse == "batch":
-            pruner = tp.pruner.BNScalePruner(
-                model,
-                example_inputs,
-                imp,
-                ignored_layers=ignored_layers,
-                iterative_steps=iterative_steps,
-                ch_sparsity=0.3,
-                isomorphic=True,
-                global_pruning=True
-            )
-
     for epoch in range(start_epoch, epochs):  # epoch ------------------------------------------------------------------
         callbacks.run("on_train_epoch_start")
         model.train()
-        if opt.sparse:
-            pruner.update_regularizer()
 
         # Update image weights (optional, single-GPU only)
         if opt.image_weights:
@@ -468,9 +430,6 @@ def train(hyp, opt, device, callbacks):  # hyp is path/to/hyp.yaml or hyp dictio
                 scaler.unscale_(optimizer)  # unscale gradients
                 torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=10.0)  # clip gradients
 
-                if opt.sparse:
-                    pruner.regularize(model)
-                
                 scaler.step(optimizer)  # optimizer.step
                 scaler.update()
                 optimizer.zero_grad()
@@ -526,7 +485,8 @@ def train(hyp, opt, device, callbacks):  # hyp is path/to/hyp.yaml or hyp dictio
             callbacks.run("on_fit_epoch_end", log_vals, epoch, best_fitness, fi)
 
             # Save model
-            if (not nosave) or (final_epoch and not evolve):  # if save
+            # if (not nosave) or (final_epoch and not evolve):  # if save
+            if (not nosave) or (final_epoch):  # if save
                 ckpt = {
                     "epoch": epoch,
                     "best_fitness": best_fitness,
@@ -589,6 +549,170 @@ def train(hyp, opt, device, callbacks):  # hyp is path/to/hyp.yaml or hyp dictio
     torch.cuda.empty_cache()
     return results
 
+def train_neumeta(hyp, opt, device, callbacks): # hyp is path/to/hyp.yaml or hyp dictionary
+    save_dir, epochs, batch_size, weights, single_cls, data, cfg, noval, nosave, workers, freeze = (
+        Path(opt.save_dir),
+        opt.epochs,
+        opt.batch_size,
+        opt.weights,
+        opt.single_cls,
+        opt.data,
+        opt.cfg,
+        opt.noval,
+        opt.nosave,
+        opt.workers,
+        opt.freeze,
+    )
+    callbacks.run("on_pretrain_routine_start")
+    
+    # Directories
+    w = save_dir / "weights"  # weights dir
+    # (w.parent if evolve else w).mkdir(parents=True, exist_ok=True)  # make dir
+    (w).mkdir(parents=True, exist_ok=True)  # make dir
+    last, best = w / "last.pt", w / "best.pt"
+
+    # Hyperparameters
+    if isinstance(hyp, str):
+        with open(hyp, errors="ignore") as f:
+            hyp = yaml.safe_load(f)  # load hyps dict
+    LOGGER.info(colorstr("hyperparameters: ") + ", ".join(f"{k}={v}" for k, v in hyp.items()))
+    opt.hyp = hyp.copy()  # for saving hyps to checkpoints
+
+    # Loggers
+    data_dict = None
+    if RANK in {-1, 0}:
+        loggers = Loggers(save_dir, weights, opt, hyp, LOGGER)  # loggers instance
+
+        # Register actions
+        for k in methods(loggers):
+            callbacks.register_action(k, callback=getattr(loggers, k))
+
+        # Process custom dataset artifact link
+        data_dict = loggers.remote_dataset
+
+    # get model_cls
+    model_cls = create_model_yolov3("yoloface500k", LOCAL_RANK, device, opt, hyp, path=opt.model.pretrained_path)
+    # get parameters
+    checkpoints = model_cls.learnable_parameter
+    number_param = len(checkpoints)
+    print("Number of keys", number_param)
+    print(f"Number of learnable parameters: {number_param}")
+
+    # hypernet
+    hyper_model = get_hypernet(opt, number_param, device)
+    # initialize EMA
+    ema = EMA(hyper_model, decay=opt.hyper_model.ema_decaty)
+    # Get the criterion, validation criterion, optimizer, and scheduler
+    criterion, val_criterion, optimizer, scheduler = get_optimizer(opt, hyper_model)
+
+    # Initialize the starting epoch and best accuracy
+    start_epoch = 0
+    best_acc = 0.0
+    
+    # Create the directory to save the model
+    os.makedirs(opt.training.save_model_path, exist_ok=True)
+     # If specified, load the checkpoint
+    if opt.resume_from:
+        print(f"Resuming from checkpoint: {opt.resume_from}")
+        checkpoint_info = load_checkpoint(opt.resume_from, hyper_model, optimizer, ema)
+        start_epoch = checkpoint_info['epoch']
+        best_acc = checkpoint_info['best_acc']
+        print(f"Resuming from epoch: {start_epoch}, best accuracy: {best_acc*100:.2f}%")
+        # Note: If there are more elements to retrieve, do so here.
+    
+    # If not testing, initialize wandb, the model dictionary, and the ground truth model dictionary
+    if opt.test == False:
+        initialize_wandb(opt)
+        dim_dict, gt_model_dict = init_model_dict(opt, LOCAL_RANK, device)
+        dim_dict = shuffle_coordiates_all(dim_dict)     # 这里会create mask
+        
+        # Iterate over the epochs
+        for epoch in range(start_epoch, opt.experiment.num_epochs):
+            
+            # Train the model for one epoch
+            train_loss, dim_dict, gt_model_dict = train_one_epoch(hyper_model, train_loader, optimizer, criterion, dim_dict, gt_model_dict, epoch_idx=epoch, ema=ema, args=args)
+            # Step the scheduler
+            scheduler.step()
+
+            # Print the training loss and learning rate
+            print(f"Epoch [{epoch+1}/{opt.experiment.num_epochs}], Training Loss: {train_loss:.4f}, Learning Rate: {scheduler.get_last_lr()[0]:.6f}")
+
+            # If it's time to evaluate the model
+            if (epoch + 1) % opt.experiment.eval_interval == 0:
+                # If EMA is specified, apply it
+                if ema:
+                    ema.apply()
+                    
+                # Sample the merged model
+                model = sample_merge_model(hyper_model, model, args)
+                # Validate the merged model
+                val_loss, acc = validate_single(model, val_loader, val_criterion, args=args)
+                
+                # If EMA is specified, restore the original weights
+                if ema:
+                    ema.restore()  # Restore the original weights
+               
+                # Log the validation loss and accuracy to wandb
+                wandb.log({
+                    "Validation Loss": val_loss,
+                    "Validation Accuracy": acc
+                })
+                
+                # Print the validation loss and accuracy
+                print(f"Epoch [{epoch+1}/{args.experiment.num_epochs}], Validation Loss: {val_loss:.4f}, Validation Accuracy: {acc*100:.2f}%")
+                
+                # Save the checkpoint if the accuracy is better than the previous best
+                if acc > best_acc:
+                    best_acc = acc
+                    save_checkpoint(f"{args.training.save_model_path}/cifar10_nerf_best_{args.ratio}.pth",hyper_model,optimizer,ema,epoch,best_acc)
+                    print(f"Checkpoint saved at epoch {epoch} with accuracy: {best_acc*100:.2f}%")
+        wandb.finish()
+    # If testing, iterate over the hidden dimensions and test the model
+    else:
+        initialize_wandb(args)
+        for hidden_dim in range(1, 65):
+            # Create a model for the given hidden dimension
+            model = create_model(args.model.type, 
+                                 hidden_dim=hidden_dim, 
+                                 path=args.model.pretrained_path, 
+                                 smooth=args.model.smooth).to(device)
+
+            # If EMA is specified, apply it
+            if ema:
+                print("Applying EMA")
+                ema.apply()
+                
+            # Sample the merged model
+            accumulated_model = sample_merge_model(hyper_model, model, args, K=100)
+
+            # Validate the merged model
+            val_loss, acc = validate_single(accumulated_model, val_loader, val_criterion, args=args)
+            
+            # If EMA is specified, restore the original weights after applying EMA
+            if ema:
+                ema.restore()  # Restore the original weights after applying EMA
+            
+            # Save the model
+            save_name = os.path.join(args.training.save_model_path, f"cifar10_{accumulated_model.__class__.__name__}_dim{hidden_dim}_single.pth")
+            torch.save(accumulated_model.state_dict(),save_name)
+            wandb.log({
+                    "Validation Loss": val_loss,
+                    "Validation Accuracy": acc
+                }, step= int(hidden_dim / args.dimensions.start * 100))
+            # Print the results
+            print(f"Test using model {args.model}: hidden_dim {hidden_dim}, Validation Loss: {val_loss:.4f}, Validation Accuracy: {acc*100:.2f}%")
+            
+            # Define the directory and filename structure
+            filename = f"cifar10_results_{args.experiment.name}.txt"
+            filepath = os.path.join(args.training.save_model_path, filename)
+
+            # Write the results. 'a' is used to append the results; a new file will be created if it doesn't exist.
+            with open(filepath, "a") as file:
+                file.write(f"Hidden_dim: {hidden_dim}, Validation Loss: {val_loss:.4f}, Validation Accuracy: {acc*100:.2f}%\n")
+        wandb.finish()
+    # Print message
+    print("Training finished.")
+    pass
 
 def parse_opt(known=False):
     """
@@ -650,7 +774,6 @@ def parse_opt(known=False):
     parser.add_argument("--save-period", type=int, default=-1, help="Save checkpoint every x epochs (disabled if < 1)")
     parser.add_argument("--seed", type=int, default=0, help="Global training seed")
     parser.add_argument("--local_rank", type=int, default=-1, help="Automatic DDP Multi-GPU argument, do not modify")
-    parser.add_argument("--sparse", type=str, default=None, help="Sparse weights for training.(group for GroupNorm, batch for BN)")
     parser.add_argument("--dynamic-weight", action="store_true", help="Dynamic weight in computing loss")
 
     # Logger arguments
@@ -659,49 +782,51 @@ def parse_opt(known=False):
     parser.add_argument("--bbox_interval", type=int, default=-1, help="Set bounding-box image logging interval")
     parser.add_argument("--artifact_alias", type=str, default="latest", help="Version of dataset artifact to use")
 
-    return parser.parse_known_args()[0] if known else parser.parse_args()
+    # neumeta arguments
+    parser.add_argument("--neumeta-cfg", type=str, required=True, 
+                        help="neumeta configuration yaml")
+    parser.add_argument('--ratio', type=float, default=1.0,
+                        help='Ratio used for training purposes')
+    parser.add_argument('--resume_from', type=str,
+                        help='Checkpoint file path to resume training from')
+    parser.add_argument('--load_from', type=str,
+                        help='Checkpoint file path to load')
+    parser.add_argument('--test_result_path', type=str,
+                        help='Path to save the test result')
+    parser.add_argument('--test', action='store_true',
+                        default=False, help='Test the model')
+
+    parse_result = parser.parse_known_args()[0] if known else parser.parse_args()
+    neumeta_config = OmegaConf.load(parse_result.neumeta_cfg)
+
+    if neumeta_config.get("base_config", None):
+        print("Loading base config from " + neumeta_config.base_config)
+        base_config = OmegaConf.load(neumeta_config.base_config)
+        neumeta_config = OmegaConf.merge(base_config, neumeta_config)
+    
+    cli_args = {k: v for k, v in vars(parse_result).items()}
+    config = OmegaConf.merge(neumeta_config, cli_args)
+    
+    if len(config.dimensions.range) == 2:
+        interval = config.dimensions.get('interval', 1)
+        config.dimensions.range = list(
+            range(config.dimensions.range[0], config.dimensions.range[1] + 1, interval))
+    # return parser.parse_known_args()[0] if known else parser.parse_args()
+    # return parse_result
+    args = argparse.Namespace(**config)
+    return args
 
 
 def main(opt, callbacks=Callbacks()):
-    """
-    Main training/evolution script handling model checks, DDP setup, training, and hyperparameter evolution.
-
-    Args:
-        opt (argparse.Namespace): Parsed command-line options.
-        callbacks (Callbacks, optional): Callback object for handling training events. Defaults to Callbacks().
-
-    Returns:
-        None
-
-    Raises:
-        AssertionError: If certain constraints are violated (e.g., when specific options are incompatible with DDP training).
-
-    Notes:
-       - For a tutorial on using Multi-GPU with DDP: https://docs.ultralytics.com/yolov5/tutorials/multi_gpu_training
-
-    Example:
-        Single-GPU training:
-        ```python
-        $ python train.py --data coco128.yaml --weights yolov5s.pt --img 640  # from pretrained (recommended)
-        $ python train.py --data coco128.yaml --weights '' --cfg yolov5s.yaml --img 640  # from scratch
-        ```
-
-        Multi-GPU DDP training:
-        ```python
-        $ python -m torch.distributed.run --nproc_per_node 4 --master_port 1 train.py --data coco128.yaml \
-        --weights yolov5s.pt --img 640 --device 0,1,2,3
-        ```
-
-        Models: https://github.com/ultralytics/yolov5/tree/master/models
-        Datasets: https://github.com/ultralytics/yolov5/tree/master/data
-        Tutorial: https://docs.ultralytics.com/yolov5/tutorials/train_custom_data
-    """
+    # set random seed
+    set_seed(opt.experiment.seed)
+    
     if RANK in {-1, 0}:
         print_args(vars(opt))
         check_git_status()
         check_requirements(ROOT / "requirements.txt")
 
-    # Resume (from specified or most recent last.pt)
+    # do check
     if opt.resume and not check_comet_resume(opt) and not opt.evolve:
         last = Path(check_file(opt.resume) if isinstance(opt.resume, str) else get_latest_run())
         opt_yaml = last.parent.parent / "opt.yaml"  # train options yaml
@@ -724,10 +849,6 @@ def main(opt, callbacks=Callbacks()):
             str(opt.project),
         )  # checks
         assert len(opt.cfg) or len(opt.weights), "either --cfg or --weights must be specified"
-        if opt.evolve:
-            if opt.project == str(ROOT / "runs/train"):  # if default project name, rename to runs/evolve
-                opt.project = str(ROOT / "runs/evolve")
-            opt.exist_ok, opt.resume = opt.resume, False  # pass resume to exist_ok and disable resume
         if opt.name == "cfg":
             opt.name = Path(opt.cfg).stem  # use model.yaml as name
         opt.save_dir = str(increment_path(Path(opt.project) / opt.name, exist_ok=opt.exist_ok))
@@ -746,119 +867,10 @@ def main(opt, callbacks=Callbacks()):
         dist.init_process_group(backend="nccl" if dist.is_nccl_available() else "gloo")
 
     # Train
+
     if not opt.evolve:
-        train(opt.hyp, opt, device, callbacks)
-
-    # Evolve hyperparameters (optional)
-    else:
-        # Hyperparameter evolution metadata (mutation scale 0-1, lower_limit, upper_limit)
-        meta = {
-            "lr0": (1, 1e-5, 1e-1),  # initial learning rate (SGD=1E-2, Adam=1E-3)
-            "lrf": (1, 0.01, 1.0),  # final OneCycleLR learning rate (lr0 * lrf)
-            "momentum": (0.3, 0.6, 0.98),  # SGD momentum/Adam beta1
-            "weight_decay": (1, 0.0, 0.001),  # optimizer weight decay
-            "warmup_epochs": (1, 0.0, 5.0),  # warmup epochs (fractions ok)
-            "warmup_momentum": (1, 0.0, 0.95),  # warmup initial momentum
-            "warmup_bias_lr": (1, 0.0, 0.2),  # warmup initial bias lr
-            "box": (1, 0.02, 0.2),  # box loss gain
-            "cls": (1, 0.2, 4.0),  # cls loss gain
-            "cls_pw": (1, 0.5, 2.0),  # cls BCELoss positive_weight
-            "obj": (1, 0.2, 4.0),  # obj loss gain (scale with pixels)
-            "obj_pw": (1, 0.5, 2.0),  # obj BCELoss positive_weight
-            "iou_t": (0, 0.1, 0.7),  # IoU training threshold
-            "anchor_t": (1, 2.0, 8.0),  # anchor-multiple threshold
-            "anchors": (2, 3.0, 3.0),  # anchors per output grid (0 to ignore)
-            "fl_gamma": (0, 0.0, 2.0),  # focal loss gamma (efficientDet default gamma=1.5)
-            "hsv_h": (1, 0.0, 0.1),  # image HSV-Hue augmentation (fraction)
-            "hsv_s": (1, 0.0, 0.9),  # image HSV-Saturation augmentation (fraction)
-            "hsv_v": (1, 0.0, 0.9),  # image HSV-Value augmentation (fraction)
-            "degrees": (1, 0.0, 45.0),  # image rotation (+/- deg)
-            "translate": (1, 0.0, 0.9),  # image translation (+/- fraction)
-            "scale": (1, 0.0, 0.9),  # image scale (+/- gain)
-            "shear": (1, 0.0, 10.0),  # image shear (+/- deg)
-            "perspective": (0, 0.0, 0.001),  # image perspective (+/- fraction), range 0-0.001
-            "flipud": (1, 0.0, 1.0),  # image flip up-down (probability)
-            "fliplr": (0, 0.0, 1.0),  # image flip left-right (probability)
-            "mosaic": (1, 0.0, 1.0),  # image mixup (probability)
-            "mixup": (1, 0.0, 1.0),  # image mixup (probability)
-            "copy_paste": (1, 0.0, 1.0),
-        }  # segment copy-paste (probability)
-
-        with open(opt.hyp, errors="ignore") as f:
-            hyp = yaml.safe_load(f)  # load hyps dict
-            if "anchors" not in hyp:  # anchors commented in hyp.yaml
-                hyp["anchors"] = 3
-        if opt.noautoanchor:
-            del hyp["anchors"], meta["anchors"]
-        opt.noval, opt.nosave, save_dir = True, True, Path(opt.save_dir)  # only val/save final epoch
-        # ei = [isinstance(x, (int, float)) for x in hyp.values()]  # evolvable indices
-        evolve_yaml, evolve_csv = save_dir / "hyp_evolve.yaml", save_dir / "evolve.csv"
-        if opt.bucket:
-            # download evolve.csv if exists
-            subprocess.run(
-                [
-                    "gsutil",
-                    "cp",
-                    f"gs://{opt.bucket}/evolve.csv",
-                    str(evolve_csv),
-                ]
-            )
-
-        for _ in range(opt.evolve):  # generations to evolve
-            if evolve_csv.exists():  # if evolve.csv exists: select best hyps and mutate
-                # Select parent(s)
-                parent = "single"  # parent selection method: 'single' or 'weighted'
-                x = np.loadtxt(evolve_csv, ndmin=2, delimiter=",", skiprows=1)
-                n = min(5, len(x))  # number of previous results to consider
-                x = x[np.argsort(-fitness(x))][:n]  # top n mutations
-                w = fitness(x) - fitness(x).min() + 1e-6  # weights (sum > 0)
-                if parent == "single" or len(x) == 1:
-                    # x = x[random.randint(0, n - 1)]  # random selection
-                    x = x[random.choices(range(n), weights=w)[0]]  # weighted selection
-                elif parent == "weighted":
-                    x = (x * w.reshape(n, 1)).sum(0) / w.sum()  # weighted combination
-
-                # Mutate
-                mp, s = 0.8, 0.2  # mutation probability, sigma
-                npr = np.random
-                npr.seed(int(time.time()))
-                g = np.array([meta[k][0] for k in hyp.keys()])  # gains 0-1
-                ng = len(meta)
-                v = np.ones(ng)
-                while all(v == 1):  # mutate until a change occurs (prevent duplicates)
-                    v = (g * (npr.random(ng) < mp) * npr.randn(ng) * npr.random() * s + 1).clip(0.3, 3.0)
-                for i, k in enumerate(hyp.keys()):  # plt.hist(v.ravel(), 300)
-                    hyp[k] = float(x[i + 7] * v[i])  # mutate
-
-            # Constrain to limits
-            for k, v in meta.items():
-                hyp[k] = max(hyp[k], v[1])  # lower limit
-                hyp[k] = min(hyp[k], v[2])  # upper limit
-                hyp[k] = round(hyp[k], 5)  # significant digits
-
-            # Train mutation
-            results = train(hyp.copy(), opt, device, callbacks)
-            callbacks = Callbacks()
-            # Write mutation results
-            keys = (
-                "metrics/precision",
-                "metrics/recall",
-                "metrics/mAP_0.5",
-                "metrics/mAP_0.5:0.95",
-                "val/box_loss",
-                "val/obj_loss",
-                "val/cls_loss",
-            )
-            print_mutation(keys, results, hyp.copy(), save_dir, opt.bucket)
-
-        # Plot results
-        plot_evolve(evolve_csv)
-        LOGGER.info(
-            f'Hyperparameter evolution finished {opt.evolve} generations\n'
-            f"Results saved to {colorstr('bold', save_dir)}\n"
-            f'Usage example: $ python train.py --hyp {evolve_yaml}'
-        )
-
+        # train(opt.hyp, opt, device, callbacks)
+        train_neumeta(opt.hyp, opt, device, callbacks)
 
 def run(**kwargs):
     """
@@ -923,4 +935,6 @@ def run(**kwargs):
 
 if __name__ == "__main__":
     opt = parse_opt()
+    # print_omegaconf(opt)
+    print_namespace(opt)
     main(opt)

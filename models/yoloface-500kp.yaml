@@ -1,3 +1,5 @@
+# yoloface-500kp is the updated version of yoloface-500k, output channels of some layers have been modified to be more compatible
+
 nc: 1 # number of classes
 depth_multiple: 1.0 # model depth multiple
 width_multiple: 1.0 # layer channel multiple
