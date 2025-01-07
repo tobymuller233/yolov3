@@ -9,7 +9,7 @@ experiment:
 
 # Model configurations
 model:
-  type: ResNet18
+  type: yoloface500kp # Model type
   pretrained_path: weights/model_plus_final.pt # Path to pre-trained model
   smooth: False # Use smooth model
 

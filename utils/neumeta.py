@@ -27,6 +27,14 @@ import omegaconf
 from utils.downloads import attempt_download, is_url
 
 from smooth.permute import PermutationManager, compute_tv_loss_for_network
+from neumeta.utils import (AverageMeter, EMA, load_checkpoint, print_omegaconf, 
+                       sample_coordinates, sample_merge_model, 
+                       sample_subset, sample_weights, save_checkpoint, 
+                       set_seed, shuffle_coordiates_all, sample_single_model,
+                       validate_single, get_cifar10, 
+                       get_hypernet, get_optimizer, 
+                       parse_args, 
+                       weighted_regression_loss)
 
 def print_namespace(opt):
     """
@@ -66,7 +74,7 @@ def initialize_wandb(opt):
     import time
     run_name = f"{time.strftime('%Y%m%d%H%M%S')}-{opt.experiment.name}"
     
-    wandb.init(project="ninr_yolov3", name=run_name, config=vars(opt), group='yoloface500k')
+    wandb.init(project="ninr_yolov3", name=run_name, config=vars(opt), group='yoloface500kp')
 
 def init_model_dict(opt, LOCAL_RANK, device="cpu"):
     """
@@ -84,19 +92,24 @@ def init_model_dict(opt, LOCAL_RANK, device="cpu"):
     change_layers = {""}
     for dim in opt.dimensions.range:
         # Create a model for the given dimension
-        model_cls = create_model("yoloface500k", LOCAL_RANK, opt, device, hidden_dim=dim, path=opt.model.pretrained_path, change_layers=not None).to(device)
+        model_cls = create_model(opt.model.type, LOCAL_RANK, opt, device, hidden_dim=dim, path=opt.model.pretrained_path, change_layers=not None).to(device)
 
         # Sample the coordinates, keys, indices, and size for the model
-        coords_tensor, keys_list, indices_list, size_list = sample_coordinates(model_cls)
+        ignored_keys = None
+        coords_tensor, keys_list, indices_list, size_list = sample_coordinates(model_cls, ignored_keys=ignored_keys)
         # Add the model, coordinates, keys, indices, size, and key mask to the dictionary
         dim_dict[f"{dim}"] = (model_cls, coords_tensor, keys_list, indices_list, size_list, None)
         # If the dimension is the starting dimension, add the ground truth model to the dictionary
-        if dim == args.dimensions.start:
+
+        if dim == opt.dimensions.start:
             print(f"Loading model for dim {dim}")
-            model_trained = create_model(args.model.type, 
+            model_trained = create_model(opt.model.type, 
+                                         LOCAL_RANK,
+                                         opt,
+                                         device,
                                          hidden_dim=dim, 
-                                         path=args.model.pretrained_path, 
-                                         smooth=args.model.smooth).to(device)
+                                         path=opt.model.pretrained_path, 
+                                         smooth=opt.model.smooth).to(device)
             model_trained.eval()
             
             gt_model_dict[f"{dim}"] = model_trained
@@ -104,7 +117,7 @@ def init_model_dict(opt, LOCAL_RANK, device="cpu"):
 
 def create_model(model_name, LOCAL_RANK, opt, device, hidden_dim=240, path=None, smooth=None, change_layers=None):
     hyp = opt.hyp
-    if model_name == "yoloface500k":
+    if model_name == "yoloface500kp":
         model = create_model_yolov3(LOCAL_RANK, device, opt, hyp, hidden_dim=hidden_dim, path=path, smooth=smooth, change_layers=change_layers)
     else:
         raise ValueError(f"Unsupported model: {model_name}")
@@ -130,7 +143,7 @@ def create_model_yolov3(LOCAL_RANK, device, opt, hyp, hidden_dim=240, path=None,
         with torch_distributed_zero_first(LOCAL_RANK):
             weights = attempt_download(path)
         ckpt = torch.load(weights, map_location="cpu")  # load
-        model = Model(opt.cfg or ckpt["model"].yaml, ch=3, nc=1, anchors=hyp.get("anchors"), change_layers=change_layers).to(device) # yoloface500k.yaml
+        model = Model(opt.cfg or ckpt["model"].yaml, ch=3, nc=1, anchors=hyp.get("anchors"), change_layers=change_layers).to(device) # yoloface500kp.yaml
         exclude = ["anchor"] if (opt.cfg or hyp.get("anchors")) else []  # exclude keys
         csd = ckpt["model"].float().state_dict()  # checkpoint state_dict as FP32
         # csd = intersect_dicts(csd, model.state_dict(), exclude=exclude)  # intersect
