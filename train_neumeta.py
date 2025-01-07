@@ -591,7 +591,7 @@ def train_neumeta(hyp, opt, device, callbacks): # hyp is path/to/hyp.yaml or hyp
         data_dict = loggers.remote_dataset
 
     # get model_cls
-    model_cls = create_model_yolov3("yoloface500k", LOCAL_RANK, device, opt, hyp, path=opt.model.pretrained_path)
+    model_cls = create_model_yolov3(LOCAL_RANK, device, opt, hyp, path=opt.model.pretrained_path, smooth=opt.model.smooth)
     # get parameters
     checkpoints = model_cls.learnable_parameter
     number_param = len(checkpoints)

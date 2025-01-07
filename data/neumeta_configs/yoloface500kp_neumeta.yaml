@@ -10,7 +10,8 @@ experiment:
 # Model configurations
 model:
   type: ResNet18
-  pretrained_path: weights/model_plus_A_B.pt # Path to pre-trained model
+  pretrained_path: weights/model_plus_final.pt # Path to pre-trained model
+  smooth: True  # Use smooth model
 
 # Training configurations
 training:

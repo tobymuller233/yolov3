@@ -1,5 +1,6 @@
 import torch
 import torch.nn as nn
+import os
 
 from models.yolo import Model
 from utils.torch_utils import (
@@ -81,7 +82,7 @@ def init_model_dict(opt, LOCAL_RANK, device="cpu"):
     gt_model_dict = {}
     for dim in opt.dimensions.range:
         # Create a model for the given dimension
-        model_cls = create_model(LOCAL_RANK, opt, device, hidden_dim=dim, path=opt.model.pretrained_path).to(opt.device)
+        model_cls = create_model("yoloface500k", LOCAL_RANK, opt, device, hidden_dim=dim, path=opt.model.pretrained_path).to(opt.device)
 
         # Sample the coordinates, keys, indices, and size for the model
         coords_tensor, keys_list, indices_list, size_list = sample_coordinates(model_cls)
@@ -99,7 +100,7 @@ def init_model_dict(opt, LOCAL_RANK, device="cpu"):
             gt_model_dict[f"{dim}"] = model_trained
     return dim_dict, gt_model_dict
 
-def create_model(LOCAL_RANK, model_name, opt, device, hidden_dim=240, path=None, smooth=None):
+def create_model(model_name, LOCAL_RANK, opt, device, hidden_dim=240, path=None, smooth=None):
     hyp = opt.hyp
     if model_name == "yoloface500k":
         model = create_model_yolov3(LOCAL_RANK, device, opt, hyp, hidden_dim=hidden_dim, path=path, smooth=smooth)
@@ -129,11 +130,62 @@ def create_model_yolov3(LOCAL_RANK, device, opt, hyp, hidden_dim=240, path=None,
         model = Model(opt.cfg or ckpt["model"].yaml, ch=3, nc=1, anchors=hyp.get("anchors")).to(device) # yoloface500k.yaml
         exclude = ["anchor"] if (opt.cfg or hyp.get("anchors")) else []  # exclude keys
         csd = ckpt["model"].float().state_dict()  # checkpoint state_dict as FP32
-        csd = intersect_dicts(csd, model.state_dict(), exclude=exclude)  # intersect
-        model.load_state_dict(csd, strict=False)  # load
+        # csd = intersect_dicts(csd, model.state_dict(), exclude=exclude)  # intersect
+        # model.load_state_dict(csd, strict=False)  # load
+        model.model = load_checkpoint(model.model, csd, prefix="model.")  # load
         LOGGER.info(f"Transferred {len(csd)}/{len(ckpt['model'].float().state_dict())} items from {weights}")
     else:
         model = Model(opt.cfg, ch=3, nc=1, anchors=hyp.get("anchors")).to(device)  # create
+    
+    if smooth:
+        print("Smooth the parameters of the model")
+        print("TV original model: ", compute_tv_loss_for_network(model.model, lambda_tv=1.0).item())
+        input_tensor = torch.randn(1, 3, 640, 640)
+        permute_func = PermutationManager(model.model, input_tensor)
+        permute_dict = permute_func.compute_permute_dict()
+        model = permute_func.apply_permutations(permute_dict, ignored_keys=[('conv1.weight', 'in_channels'), ('fc.weight', 'out_channels'), ('fc.bias', 'out_channels')])
+        print("TV original model: ", compute_tv_loss_for_network(model.model, lambda_tv=1.0).item())
 
     return model
     pass
+
+def load_checkpoint(model, checkpoint, prefix='module.'):
+    """
+    Load model weights from a checkpoint file. This function handles checkpoints that may contain keys
+    that are either redundant, prefixed, or absent in the model's state_dict.
+
+    :param model: Model instance for which the weights will be loaded.
+    :param checkpoint: checkpoint.
+    :param prefix: Optional string to handle prefixed state_dict, common in models trained using DataParallel.
+    :return: Model with state dict loaded from the checkpoint.
+    """
+    # If the state_dict is wrapped inside a dictionary under the 'state_dict' key, unpack it.
+    state_dict = checkpoint.get('state_dict', checkpoint)
+
+    # If the state_dict keys contain a prefix, remove it.
+    if list(state_dict.keys())[0].startswith(prefix):
+        state_dict = {key[len(prefix):]: value for key, value in state_dict.items()}
+
+    # Retrieve the state_dict of the model.
+    model_state_dict = model.state_dict()
+
+    # Prepare a new state_dict to load into the model, ensuring that only keys that are present in the model
+    # and have the same shape are included.
+    updated_state_dict = {
+        key: value for key, value in state_dict.items()
+        if key in model_state_dict and value.shape == model_state_dict[key].shape
+    }
+    
+    unupdated = {
+        key: value for key, value in state_dict.items()
+        if key not in updated_state_dict
+    }
+    # Update the original model state_dict.
+    model_state_dict.update(updated_state_dict)
+    # for key, value in model_state_dict.items():
+    #     print(f"Updated {key}: {value.shape}")
+
+    # Load the updated state_dict into the model.
+    model.load_state_dict(model_state_dict)
+
+    return model
