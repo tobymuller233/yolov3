@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
 import os
+import random
 
 from models.yolo import Model
 from models.common import Conv, DWConv
@@ -18,7 +19,10 @@ from utils.torch_utils import (
 from utils.general import (
     LOGGER, 
     intersect_dicts,
+    Profile,
 )
+
+from utils.loss import ComputeLoss
 
 import wandb
 from prettytable import PrettyTable
@@ -209,3 +213,127 @@ def load_checkpoint(model, checkpoint, prefix='module.'):
     model.load_state_dict(model_state_dict)
 
     return model
+
+def train_one_epoch_yolov3(model, train_loader, optimizer, criterion, dim_dict, gt_model_dict, epoch_idx, device="cpu", ema=None, args=None, half=True):
+    # Set the model to training mode
+    model.train()
+    total_loss = 0.0
+
+    # Initialize AverageMeter objects to track the losses
+    losses = AverageMeter()
+    cls_losses = AverageMeter()
+    reg_losses = AverageMeter()
+    reconstruct_losses = AverageMeter()
+
+    dt = Profile(), Profile(), Profile()
+    loss = torch.zeros(3, device=device)
+    # Iterate over the training data
+    for batch_idx, (x, target, paths, shapes) in enumerate(train_loader):
+        # Zero the gradients
+        optimizer.zero_grad()
+        # Move the data to the device
+        x, target = x.to(device), target.to(device)
+        # Choose a random hidden dimension
+        hidden_dim = random.choice(args.dimensions.range)
+        # Get the model class, coordinates, keys, indices, size, and key mask for the chosen dimension
+        model_cls, coords_tensor, keys_list, indices_list, size_list, key_mask = dim_dict[f"{hidden_dim}"]
+        # Sample a subset of the coordinates, keys, indices, size, and selected keys
+        # ratio 意义何在？
+        coords_tensor, keys_list, indices_list, size_list, selected_keys = sample_subset(coords_tensor,
+                                                                                         keys_list,
+                                                                                         indices_list,
+                                                                                         size_list,
+                                                                                         key_mask,
+                                                                                         ratio=args.ratio)
+        # Add noise to the coordinates if specified
+        if hasattr(args.training, 'coordinate_noise') and args.training.coordinate_noise > 0.0:
+            coords_tensor = coords_tensor + (torch.rand_like(coords_tensor) - 0.5) * args.training.coordinate_noise
+        # Sample the weights for the model
+        model_cls, reconstructed_weights = sample_weights(model, model_cls,
+                                                          coords_tensor, keys_list, indices_list, size_list, key_mask, selected_keys,
+                                                          device=device, NORM=args.dimensions.norm)
+        model_cls.half() if half else model_cls.float()
+        hyp = args.hyp
+        nl = model_cls.model[-1].nl  # number of detection layers (used for scaling hyp['obj'])
+        nc = 1  # number of classes
+        imgsz = args.imgsz  # image size
+        hyp["box"] *= 3 / nl  # scale to layers
+        hyp["cls"] *= nc / 80 * 3 / nl
+        hyp["obj"] *= (imgsz / 640) ** 2 * 3 / nl
+        hyp["label_smoothing"] = args.label_smoothing
+        model_cls.hyp = hyp
+        
+        # Compute classification loss
+        # cls_loss = criterion(predict, target) 
+        with dt[0]:
+            x = x.half() if half else x.float()
+            x /= 255
+            nb, _, height, width = x.shape  # batch size, channels, height, width
+        
+        # Forward Pass
+        with dt[1]:
+            pred = model_cls(x)
+        
+        dynamic_weight = vars(args).get('dynamic_weight', False)
+        compute_loss = ComputeLoss(model_cls)
+        cls_loss = compute_loss(pred, target, dynamic_weight=dynamic_weight)[0]
+                
+        # Compute regularization loss
+        reg_loss = sum([torch.norm(w, p=2) for w in reconstructed_weights])
+
+        # Compute reconstruction loss if ground truth model is available
+        if f"{hidden_dim}" in gt_model_dict:
+            gt_model = gt_model_dict[f"{hidden_dim}"]
+            gt_selected_weights = [
+                w for k, w in gt_model.learnable_parameter.items() if k in selected_keys]
+
+            reconstruct_loss = weighted_regression_loss(
+                reconstructed_weights, gt_selected_weights)
+        else:
+            reconstruct_loss = torch.tensor(0.0)
+
+        # Compute the total loss
+        loss = args.hyper_model.loss_weight.ce_weight * cls_loss + args.hyper_model.loss_weight.reg_weight * \
+            reg_loss + args.hyper_model.loss_weight.recon_weight * reconstruct_loss
+
+        # Zero the gradients of the updated weights
+        for updated_weight in model_cls.parameters():
+            updated_weight.grad = None
+
+        # Compute the gradients of the reconstructed weights
+        loss.backward(retain_graph=True)
+        grad_list = [w.grad for k, w in model_cls.named_parameters() if k[6:] in selected_keys]
+        torch.autograd.backward(reconstructed_weights, grad_list)
+
+        # Clip the gradients if specified
+        if args.training.get('clip_grad', 0.0) > 0:
+            torch.nn.utils.clip_grad_value_(
+                model.parameters(), args.training.clip_grad)
+
+        # Update the weights
+        optimizer.step()
+        # Update the EMA if specified
+        if ema:
+            ema.update()  # Update the EMA after each training step
+        total_loss += loss.item()
+
+        # Update the AverageMeter objects
+        losses.update(loss.item())
+        cls_losses.update(cls_loss.item())
+        reg_losses.update(reg_loss.item())
+        reconstruct_losses.update(reconstruct_loss.item())
+
+        # Log the losses and learning rate to wandb
+        # if batch_idx % args.experiment.log_interval == 0:
+        #     wandb.log({
+        #         "Loss": losses.avg,
+        #         "Cls Loss": cls_losses.avg,
+        #         "Reg Loss": reg_losses.avg,
+        #         "Reconstruct Loss": reconstruct_losses.avg,
+        #         "Learning rate": optimizer.param_groups[0]['lr']
+        #     }, step=batch_idx + epoch_idx * len(train_loader))
+        #     # Print the losses and learning rate
+        #     print(
+        #         f"Iteration {batch_idx}: Loss = {losses.avg:.4f}, Reg Loss = {reg_losses.avg:.4f}, Reconstruct Loss = {reconstruct_losses.avg:.4f}, Cls Loss = {cls_losses.avg:.4f}, Learning rate = {optimizer.param_groups[0]['lr']:.4e}")
+    return losses.avg, dim_dict, gt_model_dict
+    pass

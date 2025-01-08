@@ -80,7 +80,7 @@ from utils.torch_utils import (
     smart_resume,
     torch_distributed_zero_first,
 )
-from utils.neumeta import create_model_yolov3, initialize_wandb, init_model_dict, print_namespace
+from utils.neumeta import create_model_yolov3, initialize_wandb, init_model_dict, print_namespace, train_one_epoch_yolov3
 
 # neumeta
 import wandb
@@ -592,6 +592,73 @@ def train_neumeta(hyp, opt, device, callbacks): # hyp is path/to/hyp.yaml or hyp
 
     # get model_cls
     model_cls = create_model_yolov3(LOCAL_RANK, device, opt, hyp, path=opt.model.pretrained_path, smooth=opt.model.smooth)
+    amp = check_amp(model_cls)  # check AMP
+    # Image size
+    gs = max(int(model_cls.stride.max()), 32)  # grid size (max stride)
+    imgsz = check_img_size(opt.imgsz, gs, floor=gs * 2)  # verify imgsz is gs-multiple
+    
+    # Batch size
+    if RANK == -1 and batch_size == -1:  # single-GPU only, estimate best batch size
+        batch_size = check_train_batch_size(model, imgsz, amp)
+        loggers.on_params_update({"batch_size": batch_size})
+    
+    cuda = device.type != "cpu"  
+    # get dataloader
+    with torch_distributed_zero_first(LOCAL_RANK):
+        data_dict = data_dict or check_dataset(data)
+    train_path, val_path = data_dict["train"], data_dict["val"]
+    nc = 1 if single_cls else int(data_dict["nc"])  # number of classes
+    names = {0: "item"} if single_cls and len(data_dict["names"]) != 1 else data_dict["names"]  # class names
+    train_loader, dataset = create_dataloader(
+        train_path,
+        imgsz,
+        batch_size // WORLD_SIZE,
+        gs,
+        single_cls,
+        hyp=hyp,
+        augment=True,
+        cache=None if opt.cache == "val" else opt.cache,
+        rect=opt.rect,
+        rank=LOCAL_RANK,
+        workers=workers,
+        image_weights=opt.image_weights,
+        quad=opt.quad,
+        prefix=colorstr("train: "),
+        shuffle=True,
+        seed=opt.seed,
+    )
+    labels = np.concatenate(dataset.labels, 0)
+    mlc = int(labels[:, 0].max())  # max label class
+    assert mlc < nc, f"Label class {mlc} exceeds nc={nc} in {data}. Possible class labels are 0-{nc - 1}"
+
+    # Process 0
+    if RANK in {-1, 0}:
+        val_loader = create_dataloader(
+            val_path,
+            imgsz,
+            batch_size // WORLD_SIZE * 2,
+            gs,
+            single_cls,
+            hyp=hyp,
+            cache=None if noval else opt.cache,
+            rect=True,
+            rank=-1,
+            workers=workers * 2,
+            pad=0.5,
+            prefix=colorstr("val: "),
+        )[0]
+
+        if not opt.resume:
+            if not opt.noautoanchor:
+                check_anchors(dataset, model=model_cls, thr=hyp["anchor_t"], imgsz=imgsz)  # run AutoAnchor
+            model_cls.half().float()  # pre-reduce anchor precision
+
+        callbacks.run("on_pretrain_routine_end", labels, names)
+    
+    # DDP mode
+    # if cuda and RANK != -1:
+    #     model = smart_DDP(model)
+        
     # get parameters
     checkpoints = model_cls.learnable_parameter
     number_param = len(checkpoints)
@@ -603,8 +670,9 @@ def train_neumeta(hyp, opt, device, callbacks): # hyp is path/to/hyp.yaml or hyp
     # initialize EMA
     ema = EMA(hyper_model, decay=opt.hyper_model.ema_decay)
     # Get the criterion, validation criterion, optimizer, and scheduler
-    criterion, val_criterion, optimizer, scheduler = get_optimizer(opt, hyper_model)
-
+    _criterion, val_criterion, optimizer, scheduler = get_optimizer(opt, hyper_model)
+    # criterion is task-specific
+    criterion = weighted_regression_loss
     # Initialize the starting epoch and best accuracy
     start_epoch = 0
     best_acc = 0.0
@@ -630,7 +698,7 @@ def train_neumeta(hyp, opt, device, callbacks): # hyp is path/to/hyp.yaml or hyp
         for epoch in range(start_epoch, opt.experiment.num_epochs):
             
             # Train the model for one epoch
-            train_loss, dim_dict, gt_model_dict = train_one_epoch(hyper_model, train_loader, optimizer, criterion, dim_dict, gt_model_dict, epoch_idx=epoch, ema=ema, args=args)
+            train_loss, dim_dict, gt_model_dict = train_one_epoch_yolov3(hyper_model, train_loader, optimizer, criterion, dim_dict, gt_model_dict, epoch_idx=epoch, device=device, ema=ema, args=opt, half=False)
             # Step the scheduler
             scheduler.step()
 
