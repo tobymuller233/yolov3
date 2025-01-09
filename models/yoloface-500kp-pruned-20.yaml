@@ -1,0 +1,72 @@
+nc: 1 # number of classes
+depth_multiple: 1.0 # model depth multiple
+width_multiple: 1.0 # layer channel multiple
+anchors:
+  - [4, 6, 7, 10, 11, 15]
+  - [16, 24, 33, 25, 26, 41]
+  - [47, 60, 83, 97, 141, 149]
+
+backbone:
+  # [from, number, module, args]
+  # args: out_channels, size, stride
+  [
+    [-1, 1, Conv, [2, 3, 2]],  # 0  [batch, 8, size/2, size/2]
+    [-1, 1, DWConv, [2, 3, 1]], # 1 [320]
+    [-1, 1, Conv, [7, 1, 1 ]], # 2  [320]
+    [-1, 1, Conv, [19, 1, 1]], # 3 [-1, 1, DWConv, [24, 3, 2]] # 4
+    [-1, 1, Conv, [6, 1, 1]], # 4
+    [-1, 1, Bottleneck3, [6, 34]], # 5
+
+    [-1, 1, Conv, [32, 1, 1]], # 6  
+    [-1, 1, DWConv, [32, 3, 2]], # 7  [160]
+    [-1, 1, Conv, [8, 1, 1]], # 8
+    [-1, 1, Bottleneck3, [8, 33]], # 9
+    [-1, 1, Bottleneck3, [8, 44]], # 10
+    
+    [-1, 1, Conv, [38, 1, 1]], # 11 
+    [-1, 1, DWConv, [38, 3, 2]], # 12 [80] 
+    [-1, 1, Conv, [12, 1, 1]], # 13
+    [-1, 1, Bottleneck3, [12, 78]], # 14
+    [-1, 1, Bottleneck3, [12, 89]], # 15
+    [-1, 1, Bottleneck3, [12, 88]], # 16
+
+    [-1, 1, Conv, [83, 1, 1]], # 17
+    [-1, 1, DWConv, [83, 3, 1]], # 18
+    [-1, 1, Conv, [24, 1, 1]], # 19
+    [-1, 1, Bottleneck3, [24, 113]], # 20
+    [-1, 1, Bottleneck3, [24, 132]], # 21
+
+    [-1, 1, Conv, [115, 1, 1]], # 22    [80]
+    [-1, 1, DWConv, [115, 3, 2]], # 23  [80] -> [40] 
+    [-1, 1, Conv, [25, 1, 1]], # 24
+    [-1, 1, Bottleneck3, [25, 130]], # 25 [batch, 40, size/16, size/16]
+    [-1, 1, Bottleneck3, [25, 218]], # 26 [batch, 40, size/16, size/16]
+  ]
+
+head: [
+    [-1, 1, Conv, [64, 1, 1]], # 27 [40]
+    [[-1, -5], 1, Concat, [1]], # 28  [batch, 224, size/16, size/16]  [40]  # to line 40 # changed from -4 to -5
+
+    [-1, 1, Conv, [39, 1, 1]], # 29
+    [-1, 1, DWConv, [39, 3, 1]], # 30
+    [-1, 1, Conv, [33, 1, 1]], # 31
+    [-1, 1, Conv, [18, 1, 1]], # 32   [batch, 18, size/8, size/8] -> [40] ###
+    
+    [-5, 1, nn.Upsample, [None, 2, "nearest"]],  # 33   [80]
+    [[-1, 12], 1, Concat, [1]],  # 34   [80]  ch = 272      # to line 27  # changed from 11 to 12
+    [-1, 1, Conv, [19, 1, 1]], # 35
+    [-1, 1, DWConv, [19, 3, 1]], # 36 
+    [-1, 1, Conv, [21, 1, 1]], # 37   
+    [-1, 1, Conv, [18, 1, 1]], # 38 [batch, 18, 160, 160] -> [80] ###
+
+    [-5, 1, nn.Upsample, [None, 2, "nearest"]],  # 39 [1, 272, 320, 320] -> [160]
+    [[-1, 7], 1, Concat, [1]],  # 40  # to line 21
+    [-1, 1, Conv, [13, 1, 1]], # 41   
+    [-1, 1, DWConv, [13, 3, 1]], # 42 
+    [-1, 1, Conv, [16, 1, 1]], # 43   
+    [-1, 1, Conv, [18, 1, 1]], # 44   [batch, 18, 320, 320] -> [160]  ###
+
+    [[44, 38, 32], 1, Detect, [nc, anchors]], 
+
+
+  ]

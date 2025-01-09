@@ -72,7 +72,15 @@ class Conv(nn.Module):
         """Applies convolution, batch normalization, and activation to input `x`; `x` shape: [N, C_in, H, W] -> [N,
         C_out, H_out, W_out].
         """
-        return self.act(self.bn(self.conv(x)))
+        # with torch.no_grad():
+        #     if torch.isnan(self.act(self.bn(self.conv(x)))).any():
+        #         print("", end="")
+        ret = self.act(self.bn(self.conv(x)))
+        if torch.isnan(ret).any():
+            print("", end="")
+        ret = torch.clamp(ret, min=-1e3, max=1e3)
+        # return self.act(self.bn(self.conv(x)))
+        return ret
 
     def forward_fuse(self, x):
         """Applies fused convolution and activation to input `x`; input shape: [N, C_in, H, W] -> [N, C_out, H_out,
@@ -465,10 +473,9 @@ class DetectMultiBackend(nn.Module):
         cuda = torch.cuda.is_available() and device.type != "cpu"  # use CUDA
         if not (pt or triton):
             w = attempt_download(w)  # download if not local
-
         if pt:  # PyTorch
             model = attempt_load(weights if isinstance(weights, list) else w, device=device, inplace=True, fuse=fuse)
-            stride = max(int(model.stride.max()), 32)  # model stride
+            stride = max(int(model.stride.max()), 16)  # model stride
             names = model.module.names if hasattr(model, "module") else model.names  # get class names
             model.half() if fp16 else model.float()
             self.model = model  # explicitly assign for to(), cpu(), cuda(), half()
@@ -1077,12 +1084,15 @@ class Classify(nn.Module):
 class Bottleneck3(nn.Module):
     """Implements a bottleneck layer with optional shortcut for efficient feature extraction in neural networks."""
 
-    def __init__(self, c1, c2, shortcut=True, g=1, e=0.5):  # ch_in, ch_out, shortcut, groups, expansion
+    def __init__(self, c1, c2, mid_layer=None, shortcut=True, g=1, e=0.5):  # ch_in, ch_out, shortcut, groups, expansion
         """Initializes a standard bottleneck layer with optional shortcut; args: input channels (c1), output channels
         (c2), shortcut (bool), groups (g), expansion factor (e).
         """
         super().__init__()
-        c_ = int(c2 * 6)  # hidden channels
+        if not mid_layer is None:
+            c_ = int(mid_layer)
+        else:
+            c_ = int(c2 * 6)  # hidden channels
         self.cv1 = Conv(c1, c_, 1, 1)
         self.cv2 = DWConv(c_, c_, 3, 1)
         self.cv3 = Conv(c_, c2, 1, 1)

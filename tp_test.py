@@ -2,44 +2,58 @@ import torch
 import torch_pruning as tp
 from models.experimental import attempt_load
 from models.yolo import Detect
+from models.yolo import Bottleneck3
 from torchvision.models import resnet18
+from datetime import datetime
 
-weights = "weights/model_plus_final.pt"
+# weights = "runs/train/model_plus_A_B/exp26/weights/best.pt"
+weights = "weights/pruned_model_plus_20_v1.pt"
+model1 = torch.load(weights)
 model = attempt_load(weights)
 model.requires_grad_(True)
 # weights = "weights/resnet.pt"
 # model = torch.load(weights)
+# f = open("model.txt", "w")
+# f.write(str(model))
 print(model)
-#print(model)
 # for m in model.modules():
 # 	if isinstance(m, Detect):
 # 		print(m)
 
-# 1. 选择合适的重要性评估指标，这里使用权值大小
+# 1. importance measure
 imp = tp.importance.MagnitudeImportance(p=2)
+# imp = tp.importance.BNScaleImportance()
 # imp = tp.importance.GroupNormImportance()
 example_inputs = torch.randn(1, 3, 640, 640) # dummy input
-# 2. 忽略无需剪枝的层，例如最后的分类层（总不能剪完类别都变少了叭？）
-ignored_layers = []
-flag = False
+# 2. layers to be ignored
+ignored_layers = [model.model[27], model.model[33], model.model[39], model.model[40]]
 for m in model.modules():
-    if isinstance(m, Detect):
-        flag = True
-    if flag:
+    if isinstance(m, Bottleneck3):
         ignored_layers.append(m)
-
-# 3. 初始化剪枝器
-iterative_steps = 5# 迭代式剪枝，重复5次Pruning-Finetuning的循环完成剪枝。
-pruner = tp.pruner.MetaPruner(
+# 3. init pruner
+iterative_steps = 10
+# pruner = tp.pruner.MetaPruner(
+#     model,
+#     example_inputs, 
+#     importance=imp, 
+#     iterative_steps=iterative_steps, 
+#     ch_sparsity=0.2, 
+#     ignored_layers=ignored_layers, 
+#     isomorphic=True,
+#     global_pruning=True
+# )
+pruner = tp.pruner.BNScalePruner(
     model,
-    example_inputs, # 用于分析依赖的伪输入
-    importance=imp, # 重要性评估指标
-    iterative_steps=iterative_steps, # 迭代剪枝，设为1则一次性完成剪枝
-    ch_sparsity=0.3, # 目标稀疏性，这里我们移除50%的通道 ResNet18 = {64, 128, 256, 512} => ResNet18_Half = {32, 64, 128, 256}
-    ignored_layers=ignored_layers, # 忽略掉最后的分类层
+    example_inputs,
+    importance=imp,
+    iterative_steps=iterative_steps,
+    ch_sparsity=0.3,
+    ignored_layers=ignored_layers,
+    isomorphic=True,
+    global_pruning=True
 )
 
-# 4. Pruning-Finetuning的循环
+# 4. Pruning-Finetuning
 base_macs, base_nparams = tp.utils.count_ops_and_params(model, example_inputs)
 for i in range(iterative_steps):
     pruner.step()
@@ -48,8 +62,18 @@ for i in range(iterative_steps):
     print("  Iter %d/%d, MACs: %.2f G => %.2f G"% (i+1, iterative_steps, base_macs / 1e9, macs / 1e9))         	
 
 result = {}
-result["model"] = model
-torch.save(result, "weights/pruned_model_plus_final.pt")
+for item, value in model1.items():
+    if item == "model":
+        result[item] = model
+    elif item == "date":
+        result[item] = datetime.now().isoformat()
+    else:
+        result[item] = value
+
+print(model)
+torch.save(result, "weights/pruned_BN_model_plus_30.pt")
+# fp = open("pruned_model3.txt", "w")
+# fp.write(str(model))
 # for i in range(iterative_steps):
 #     for group in pruner.step(interactive=True): # Warning: groups must be handled sequentially. Do not keep them as a list.
 #         print(group) 

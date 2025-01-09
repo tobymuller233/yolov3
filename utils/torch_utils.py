@@ -322,6 +322,7 @@ def model_info(model, verbose=False, imgsz=640):
         fs = ""
 
     name = Path(model.yaml_file).stem.replace("yolov5", "YOLOv3") if hasattr(model, "yaml_file") else "Model"
+    print(Path(model.yaml_file).stem)
     LOGGER.info(f"{name} summary: {len(list(model.modules()))} layers, {n_p} parameters, {n_g} gradients{fs}")
 
 

@@ -149,6 +149,12 @@ class BaseModel(nn.Module):
             if profile:
                 self._profile_one_layer(m, x, dt)
             x = m(x)  # run
+            if isinstance(x, torch.Tensor) and torch.isnan(x).any():
+                print("", end="")
+            # if not isinstance(x, list):
+            #     print(f"Layer input stats: min={x.min().item()}, max={x.max().item()}, mean={x.mean().item()}")
+            #     if torch.isnan(x).any():
+            #         print(f"NaN detected! {m._get_name()}")   # output module name
             # if not isinstance(x, tuple):
             #     fp.write(f"Layer {i}: {x.shape}\n")
             # i += 1
@@ -202,8 +208,17 @@ class BaseModel(nn.Module):
 class DetectionModel(BaseModel):
     """YOLOv3 detection model class for initializing and processing detection models with configurable parameters."""
 
-    def __init__(self, cfg="yolov5s.yaml", ch=3, nc=None, anchors=None):  # model, input channels, number of classes
+    def __init__(self, cfg="yolov5s.yaml", ch=3, nc=None, anchors=None, log=True, inr=False, change_layers=None):  # model, input channels, number of classes
         """Initializes YOLOv3 detection model with configurable YAML, input channels, classes, and anchors."""
+        """
+        :param cfg: model dict or *.yaml file path
+        :param ch: input channels
+        :param nc: number of classes
+        :param anchors: anchor sizes
+        :param log: logging
+        :param inr: neumeta
+        :param change_layers: a dict of layer indices and new output channels
+        """
         super().__init__()
         if isinstance(cfg, dict):
             self.yaml = cfg  # model dict
@@ -222,7 +237,7 @@ class DetectionModel(BaseModel):
         if anchors:
             LOGGER.info(f"Overriding model.yaml anchors with anchors={anchors}")
             self.yaml["anchors"] = round(anchors)  # override yaml value
-        self.model, self.save = parse_model(deepcopy(self.yaml), ch=[ch])  # model, savelist
+        self.model, self.save = parse_model(deepcopy(self.yaml), ch=[ch], log=log, inr=inr, change_layers=change_layers)  # model, savelist
         self.names = [str(i) for i in range(self.yaml["nc"])]  # default names
         self.inplace = self.yaml.get("inplace", True)
 
@@ -307,6 +322,11 @@ class DetectionModel(BaseModel):
                 math.log(0.6 / (m.nc - 0.99999)) if cf is None else torch.log(cf / cf.sum())
             )  # cls
             mi.bias = torch.nn.Parameter(b.view(-1), requires_grad=True)
+    
+    @property
+    def learnable_parameter(self):
+        self.keys = [k for k, v in self.model.named_parameters()]
+        return {k: v for k, v in self.model.state_dict().items() if k in self.keys}
 
 
 Model = DetectionModel  # retain YOLOv3 'Model' class for backwards compatibility
@@ -348,13 +368,15 @@ class ClassificationModel(BaseModel):
         self.model = None
 
 
-def parse_model(d, ch):  # model_dict, input_channels(3)
+def parse_model(d, ch, log=True, inr=False, change_layers=None):  # model_dict, input_channels(3)
     """Parses a YOLOv3 model configuration from a dictionary and constructs the model."""
-    LOGGER.info(f"\n{'':>3}{'from':>18}{'n':>3}{'params':>10}  {'module':<40}{'arguments':<30}")
+    if log:
+        LOGGER.info(f"\n{'':>3}{'from':>18}{'n':>3}{'params':>10}  {'module':<40}{'arguments':<30}")
     anchors, nc, gd, gw, act = d["anchors"], d["nc"], d["depth_multiple"], d["width_multiple"], d.get("activation")
     if act:
         Conv.default_act = eval(act)  # redefine default activation, i.e. Conv.default_act = nn.SiLU()
-        LOGGER.info(f"{colorstr('activation:')} {act}")  # print
+        if log:
+            LOGGER.info(f"{colorstr('activation:')} {act}")  # print
     na = (len(anchors[0]) // 2) if isinstance(anchors, list) else anchors  # number of anchors
     no = na * (nc + 5)  # number of outputs = anchors * (classes + 5)
     print(f"no: {no}; na: {na}; nc: {nc}")
@@ -418,7 +440,8 @@ def parse_model(d, ch):  # model_dict, input_channels(3)
         t = str(m)[8:-2].replace("__main__.", "")  # module type
         np = sum(x.numel() for x in m_.parameters())  # number params
         m_.i, m_.f, m_.type, m_.np = i, f, t, np  # attach index, 'from' index, type, number params
-        LOGGER.info(f"{i:>3}{str(f):>18}{n_:>3}{np:10.0f}  {t:<40}{str(args):<30}")  # print
+        if log:
+            LOGGER.info(f"{i:>3}{str(f):>18}{n_:>3}{np:10.0f}  {t:<40}{str(args):<30}")  # print
         save.extend(x % i for x in ([f] if isinstance(f, int) else f) if x != -1)  # append to savelist
         layers.append(m_)
         if i == 0:
