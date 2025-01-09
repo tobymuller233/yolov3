@@ -24,6 +24,8 @@ import time
 from copy import deepcopy
 from datetime import datetime
 from pathlib import Path
+import torch_pruning as tp
+from models.common import Bottleneck3
 
 try:
     import comet_ml  # must be imported before torch (if installed)
@@ -364,10 +366,38 @@ def train(hyp, opt, device, callbacks):  # hyp is path/to/hyp.yaml or hyp dictio
         f"Logging results to {colorstr('bold', save_dir)}\n"
         f'Starting training for {epochs} epochs...'
     )
+
+    if opt.sparse:
+        imp = tp.importance.GroupNormImportance(p=2)
+        example_inputs = torch.randn(opt.batch_size, 3, opt.imgsz, opt.imgsz).to(device)  # dummy input
+        if torch.cuda.device_count() > 1:
+            ignored_layers = [model.module.model[27], model.module.model[33], model.module.model[39], model.module.model[40]]
+            for m in model.module.modules():
+                if isinstance(m, Bottleneck3):
+                    ignored_layers.append(m)
+        else:
+            ignored_layers = [model.model[27], model.model[33], model.model[39], model.model[40]]
+            for m in model.modules():
+                if isinstance(m, Bottleneck3):
+                    ignored_layers.append(m)
+        iterative_steps = 1
+        pruner = tp.pruner.GroupNormPruner(
+            model,
+            example_inputs,
+            imp,
+            ignored_layers=ignored_layers,
+            iterative_steps=iterative_steps,
+            ch_sparsity=0.3,
+            isomorphic=True,
+            global_pruning=True
+        )
+    
     for epoch in range(start_epoch, epochs):  # epoch ------------------------------------------------------------------
         callbacks.run("on_train_epoch_start")
         model.train()
 
+        if opt.sparse:
+            pruner.update_regularizer()
         # Update image weights (optional, single-GPU only)
         if opt.image_weights:
             cw = model.class_weights.cpu().numpy() * (1 - maps) ** 2 / nc  # class weights
@@ -426,6 +456,10 @@ def train(hyp, opt, device, callbacks):  # hyp is path/to/hyp.yaml or hyp dictio
             if ni - last_opt_step >= accumulate:
                 scaler.unscale_(optimizer)  # unscale gradients
                 torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=10.0)  # clip gradients
+
+                if opt.sparse:
+                    pruner.regularize(model)
+                
                 scaler.step(optimizer)  # optimizer.step
                 scaler.update()
                 optimizer.zero_grad()
@@ -603,6 +637,7 @@ def parse_opt(known=False):
     parser.add_argument("--save-period", type=int, default=-1, help="Save checkpoint every x epochs (disabled if < 1)")
     parser.add_argument("--seed", type=int, default=0, help="Global training seed")
     parser.add_argument("--local_rank", type=int, default=-1, help="Automatic DDP Multi-GPU argument, do not modify")
+    parser.add_argument("--sparse", action="store_true", help="Sparse weights for training")
 
     # Logger arguments
     parser.add_argument("--entity", default=None, help="Entity")
