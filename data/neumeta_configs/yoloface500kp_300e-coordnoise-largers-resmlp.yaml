@@ -3,9 +3,9 @@
 base_config: /home/lmy/stu_motion/yolov3/neumeta/config/base_config.yaml
 
 experiment:
-  name: ninr_yoloface500kp-500-512
-  num_epochs: 100
-  log_interval: 1
+  name: ninr_yoloface500kp-300e-coordnoise-largers-resmlp
+  num_epochs: 300
+  log_interval: 5
   seed: 42  # Random seed
 
 # Model configurations
@@ -17,15 +17,16 @@ model:
 # Training configurations
 training:
   learning_rate: 1e-3
-  batch_size: 16
   data_path: /local_home/fanggongfan/Datasets/ImageNet/
   # strong_aug: v1
   weight_decay: 1e-2
+  coordinate_noise: 1.0
   clip_grad: 10.0
   save_model_path: toy/experiments/yoloface500kp-500-512 # Directory to save the trained model
 
 # Hyper-model specifications (specific to NeRF)
 hyper_model:
+  type: resmlp
   input_dim: 6
   hidden_dim: 256
   num_layers: 4
@@ -36,7 +37,7 @@ hyper_model:
 # Experiment dimensions configuration
 dimensions:
   range: [100, 240]  # Dimension range for the experiment
-  interval: 10  # Interval between dimensions
+  interval: 140  # Interval between dimensions
   test: 240  # Testing dimension
   norm: 240  # Normalization factor
   start: 240  # Starting dimension

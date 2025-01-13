@@ -325,9 +325,9 @@ class DetectionModel(BaseModel):
     
     @property
     def learnable_parameter(self):
-        self.keys = [k for k, v in self.model.named_parameters()]
+        self.keys = [k for k, v in self.model.named_parameters() if k.startswith(f'21.1.')]
         return {k: v for k, v in self.model.state_dict().items() if k in self.keys}
-
+        # self.keys = [k for k, w in self.named_parameters() if k.startswith(f'layer3.{self.layers[-1]-1}') ] # or k.startswith('layer3.1') or k.startswith('layer3.0')
 
 Model = DetectionModel  # retain YOLOv3 'Model' class for backwards compatibility
 

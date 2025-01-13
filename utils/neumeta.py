@@ -2,6 +2,8 @@ import torch
 import torch.nn as nn
 import os
 import random
+from tqdm import tqdm
+from pathlib import Path
 
 from models.yolo import Model
 from models.common import Conv, DWConv
@@ -16,11 +18,19 @@ from utils.torch_utils import (
     torch_distributed_zero_first,
 )
 
+from utils.plots import output_to_target, plot_images, plot_val_study
+
 from utils.general import (
     LOGGER, 
     intersect_dicts,
     Profile,
+    non_max_suppression,
+    scale_boxes,
+    xywh2xyxy,
+    xyxy2xywh,
 )
+
+from utils.metrics import ConfusionMatrix, ap_per_class, box_iou
 
 from utils.loss import ComputeLoss
 
@@ -39,6 +49,8 @@ from neumeta.utils import (AverageMeter, EMA, load_checkpoint, print_omegaconf,
                        get_hypernet, get_optimizer, 
                        parse_args, 
                        weighted_regression_loss)
+
+from val import process_batch
 
 def print_namespace(opt):
     """
@@ -324,16 +336,115 @@ def train_one_epoch_yolov3(model, train_loader, optimizer, criterion, dim_dict, 
         reconstruct_losses.update(reconstruct_loss.item())
 
         # Log the losses and learning rate to wandb
-        # if batch_idx % args.experiment.log_interval == 0:
-        #     wandb.log({
-        #         "Loss": losses.avg,
-        #         "Cls Loss": cls_losses.avg,
-        #         "Reg Loss": reg_losses.avg,
-        #         "Reconstruct Loss": reconstruct_losses.avg,
-        #         "Learning rate": optimizer.param_groups[0]['lr']
-        #     }, step=batch_idx + epoch_idx * len(train_loader))
-        #     # Print the losses and learning rate
-        #     print(
-        #         f"Iteration {batch_idx}: Loss = {losses.avg:.4f}, Reg Loss = {reg_losses.avg:.4f}, Reconstruct Loss = {reconstruct_losses.avg:.4f}, Cls Loss = {cls_losses.avg:.4f}, Learning rate = {optimizer.param_groups[0]['lr']:.4e}")
+        if batch_idx % args.experiment.log_interval == 0:
+            wandb.log({
+                "Loss": losses.avg,
+                "Cls Loss": cls_losses.avg,
+                "Reg Loss": reg_losses.avg,
+                "Reconstruct Loss": reconstruct_losses.avg,
+                "Learning rate": optimizer.param_groups[0]['lr']
+            }, step=batch_idx + epoch_idx * len(train_loader))
+            # Print the losses and learning rate
+            print(
+                f"Iteration {batch_idx}: Loss = {losses.avg:.4f}, Reg Loss = {reg_losses.avg:.4f}, Reconstruct Loss = {reconstruct_losses.avg:.4f}, Cls Loss = {cls_losses.avg:.4f}, Learning rate = {optimizer.param_groups[0]['lr']:.4e}")
     return losses.avg, dim_dict, gt_model_dict
     pass
+
+def validate_single_yolov3_single_cls(model_cls, val_loader, criterion, conf_thres=0.001, iou_thres=0.60, args=None, device="cpu", plots=False, save_dir=Path(""), augment=False, half=False):
+    dt = Profile(), Profile(), Profile()
+    model_cls.eval()
+    iouv = torch.linspace(0.5, 0.95, 10, device=device)  # IoU thresholds
+    niou = iouv.numel()
+    
+    hyp = args.hyp
+    nl = model_cls.model[-1].nl  # number of detection layers (used for scaling hyp['obj'])
+    nc = 1  # number of classes
+    imgsz = args.imgsz  # image size
+    hyp["box"] *= 3 / nl  # scale to layers
+    hyp["cls"] *= nc / 80 * 3 / nl
+    hyp["obj"] *= (imgsz / 640) ** 2 * 3 / nl
+    hyp["label_smoothing"] = args.label_smoothing
+    model_cls.hyp = hyp    
+    s = ("%22s" + "%11s" * 6) % ("Class", "Images", "Instances", "P", "R", "mAP50", "mAP50-95")
+    loss = torch.zeros(3, device=device)
+    confusion_matrix = ConfusionMatrix(nc=nc)
+    names = model_cls.names if hasattr(model_cls, "names") else model_cls.module.names
+
+    compute_loss = ComputeLoss(model_cls)
+
+    jdict, stats, ap, ap_class = [], [], [], []
+    
+    pbar = tqdm(val_loader, desc=s, bar_format="{l_bar}{bar:10}{r_bar}")
+    for batch_i, (im, targets, paths, shapes) in enumerate(pbar):
+        with dt[0]:
+            im = im.to(device, non_blocking=True)
+            im = im.half() if half else im.float()
+            targets = targets.to(device)
+            im /= 255
+            nb, _, weight, width = im.shape
+
+        with dt[1]:
+            pred, train_out = model_cls(im) if compute_loss else (model_cls(im, augment=augment), None)
+        
+        if isinstance(pred, torch.Tensor):
+            pred = pred.detach()
+        elif isinstance(pred, list):
+            pred = [x.detach() for x in pred]
+        if compute_loss:
+            loss += compute_loss(train_out, targets, args.dynamic_weight)[1]
+        
+        
+        # NMS
+        targets[:, 2:] *= torch.tensor([width, weight, width, weight], device=im.device)
+        lb = [] # for autolabelling
+        with dt[2]:
+            preds = non_max_suppression(pred, conf_thres=conf_thres, iou_thres=iou_thres, multi_label=True, agnostic=True, max_det=300)
+        
+        # Metrics
+        for si, pred in enumerate(preds):
+            labels = targets[targets[:, 0] == si, 1:]
+            nl, npr = labels.shape[0], pred.shape[0]  # number of labels, number of predictions
+            path, shape = Path(paths[si]), shapes[si][0]
+            correct = torch.zeros(npr, niou, dtype=torch.bool, device=device)
+        
+            if npr == 0:
+                if nl:
+                    stats.append((correct, *torch.zeros((2, 0), device=device), labels[:, 0]))
+                    if plots:
+                        confusion_matrix.process_batch(detections=None, labels=labels[:, 0])
+                continue
+            
+            # Predictions
+            pred[:, 5] = 0 # single class
+
+            predn = pred.clone()
+            scale_boxes(im[si].shape[1:], predn[:, :4], shape, shapes[si][1])   # native-space pred
+
+            # Evaluate
+            tbox = xywh2xyxy(labels[:, 1:5])
+            scale_boxes(im[si].shape[1:], tbox, shape, shapes[si][1])
+            labelsn = torch.cat((labels[:, 0:1], tbox), 1)
+            correct = process_batch(predn, labelsn, iouv)
+            if plots:
+                confusion_matrix.process_batch(detections=predn, labels=labelsn)
+            
+            stats.append((correct, pred[:, 4], pred[:, 5], labels[:, 0]))   # correct, conf, cls, label
+        
+        # Plot images
+        if plots and batch_i < 3:
+            plot_images(im, targets, paths, save_dir / f"val_batch{batch_i}_labels.jpg", names)  
+            plot_images(im, output_to_target(preds), paths, save_dir / f"val_batch{batch_i}_pred.jpg", names)  # pred
+    # Compute metrics
+    stats = [torch.cat(x, 0).cpu().numpy() for x in zip(*stats)]  # to numpy
+    if len(stats) and stats[0].any():
+        p, fp, p, r, f1, ap, ap_class = ap_per_class(*stats, plot=plots, save_dir=save_dir, names=names)
+        ap50, ap = ap[:, 0], ap.mean(1)  # AP@0.5, AP@0.5:0.95
+        mp, mr, map50, map = p.mean(), r.mean(), ap50.mean(), ap.mean()
+    
+    return loss, mp, mr, map50, map
+    
+            
+        
+    # ComputeLoss需要的是分开的结果，而NMS需要的是合并的！
+    # 因为训练的时候不需要求NMS，所以只需要返回分开的结果！
+

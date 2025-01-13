@@ -80,7 +80,9 @@ from utils.torch_utils import (
     smart_resume,
     torch_distributed_zero_first,
 )
-from utils.neumeta import create_model_yolov3, initialize_wandb, init_model_dict, print_namespace, train_one_epoch_yolov3
+from utils.neumeta import (create_model_yolov3, initialize_wandb, 
+                           init_model_dict, print_namespace, train_one_epoch_yolov3,
+                           validate_single_yolov3_single_cls)
 
 # neumeta
 import wandb
@@ -88,7 +90,7 @@ from neumeta.utils import (AverageMeter, EMA, load_checkpoint, print_omegaconf,
                        sample_coordinates, sample_merge_model, 
                        sample_subset, sample_weights, save_checkpoint, 
                        set_seed, shuffle_coordiates_all, sample_single_model,
-                       validate_single, get_cifar10, 
+                       get_cifar10, 
                        get_hypernet, get_optimizer, 
                        parse_args, 
                        weighted_regression_loss)
@@ -712,32 +714,38 @@ def train_neumeta(hyp, opt, device, callbacks): # hyp is path/to/hyp.yaml or hyp
                     ema.apply()
                     
                 # Sample the merged model
-                model = sample_merge_model(hyper_model, model, args)
+                model_cls = sample_merge_model(hyper_model, model_cls, opt)
+                model_cls.names = names
                 # Validate the merged model
-                val_loss, acc = validate_single(model, val_loader, val_criterion, args=args)
+                val_loss, val_mp, val_mr, val_map50, val_map = validate_single_yolov3_single_cls(model_cls, val_loader, val_criterion, args=opt, device=device, plots=True, save_dir=save_dir)
                 
                 # If EMA is specified, restore the original weights
                 if ema:
                     ema.restore()  # Restore the original weights
-               
+
+                log_val_loss = sum(val_loss) / len(val_loss)
                 # Log the validation loss and accuracy to wandb
                 wandb.log({
-                    "Validation Loss": val_loss,
-                    "Validation Accuracy": acc
+                    "Validation Loss": log_val_loss,
+                    "Validation mean precision": val_mp,
+                    "Validation mean recall": val_mr,
+                    "Validation mAP@50": val_map50,
+                    "Validation mAP": val_map
                 })
                 
                 # Print the validation loss and accuracy
-                print(f"Epoch [{epoch+1}/{args.experiment.num_epochs}], Validation Loss: {val_loss:.4f}, Validation Accuracy: {acc*100:.2f}%")
+                # print(f"Epoch [{epoch+1}/{opt.experiment.num_epochs}], Validation Loss: {val_loss:.4f}, Validation Accuracy: {acc*100:.2f}%")
+                print(f"Epoch [{epoch+1}/{opt.experiment.num_epochs}], Validation Loss: {log_val_loss:.4f}, Validation mean precision: {val_mp:.4f}, Validation mean recall: {val_mr:.4f}, Validation mAP@50: {val_map50:.4f}, Validation mAP: {val_map:.4f}")
                 
                 # Save the checkpoint if the accuracy is better than the previous best
-                if acc > best_acc:
-                    best_acc = acc
-                    save_checkpoint(f"{args.training.save_model_path}/cifar10_nerf_best_{args.ratio}.pth",hyper_model,optimizer,ema,epoch,best_acc)
+                if val_map50 > best_acc:
+                    best_acc = val_map50
+                    save_checkpoint(f"{opt.training.save_model_path}/cifar10_nerf_best_{opt.ratio}.pth",hyper_model,optimizer,ema,epoch,best_acc)
                     print(f"Checkpoint saved at epoch {epoch} with accuracy: {best_acc*100:.2f}%")
         wandb.finish()
     # If testing, iterate over the hidden dimensions and test the model
     else:
-        initialize_wandb(args)
+        initialize_wandb(opt)
         for hidden_dim in range(1, 65):
             # Create a model for the given hidden dimension
             model = create_model(args.model.type, 

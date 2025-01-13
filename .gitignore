@@ -1,4 +1,4 @@
-# Repo-specific GitIgnore ----------------------------------------------------------------------------------------------
+# Repo-specific GitIgGore ----------------------------------------------------------------------------------------------
 *.jpg
 *.jpeg
 *.png
@@ -263,3 +263,10 @@ fabric.properties
 
 # vscode
 .vscode/
+
+# neumeta
+toy/
+neumeta/
+smooth/
+neumeta
+smooth
