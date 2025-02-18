@@ -16,7 +16,7 @@ from ultralytics.utils.plotting import Annotator, colors, save_one_box
 
 from models.common import DetectMultiBackend, Conv, DWConv
 from models.yolo import Model
-from utils.dataloaders import IMG_FORMATS, VID_FORMATS, LoadImages, LoadScreenshots, LoadStreams
+from utils.dataloaders import create_dataloader, IMG_FORMATS, VID_FORMATS, LoadImages, LoadScreenshots, LoadStreams
 from utils.general import (
     LOGGER,
     Profile,
@@ -34,7 +34,7 @@ from utils.general import (
     xyxy2xywh,
 )
 from utils.torch_utils import select_device, smart_inference_mode
-from utils.neumeta import load_checkpoint_mine
+from utils.neumeta import load_checkpoint_mine, validate_single_yolov3_single_cls
 from neumeta.utils import get_hypernet, load_checkpoint, sample_merge_model
 
 from omegaconf import OmegaConf
@@ -53,6 +53,14 @@ def parse_opt():
     parser.add_argument("--save-path", type=str, default=ROOT / "inference", help="save path")
     parser.add_argument("--yaml", type=str, default=ROOT / "models/yolov3.yaml", help="model.yaml path")
     parser.add_argument("--test-model", action="store_true", default=False, help="test model")
+
+    # if test
+    parser.add_argument("--data-path", type=str, default=ROOT / "datasets/SCUT_HEAD_A/val/images", help="data path")
+    parser.add_argument("--imgsz", "--img", "--imgs", type=int, default=640, help="inference size (pixels)")
+    parser.add_argument("--batch-size", type=int, default=1, help="batch size")
+    parser.add_argument("--label-smoothing", default=True, help="label smoothing")
+    parser.add_argument("--dynamic_weight", action="store_true", default=True, help="dynamic weight")
+    parser.add_argument("--hyp", type=str, default=ROOT / "data/hyps/hyp.scratch-high.yaml", help="hyperparameters path")
 
     parser_result = parser.parse_args()
 
@@ -100,6 +108,36 @@ def main(args):
         
         save_path = os.path.join(args.save_path, f"{args.experiment.name}_{args.ratio}.pth")
         torch.save(accumulated_model.state_dict(), save_path)
+    
+    if args.test_model:
+        val_path = args.data_path
+        imgsz = args.imgsz
+        batch_size = args.batch_size
+        gs = max(int(accumulated_model.stride.max()), 32)  # grid size (max stride)
+        single_cls = True
+        hyp = args.hyp
+        import yaml
+        with open(hyp, errors="ignore") as f:
+            hyp = yaml.safe_load(f)
+        args.hyp = hyp.copy()
+
+        val_loader = create_dataloader(
+            val_path, 
+            imgsz,
+            batch_size // WORLD_SIZE * 2,
+            gs,
+            single_cls,
+            hyp=hyp,
+            cache=None,
+            rect=True,
+            rank=-1,
+            pad=0.5,
+            prefix=colorstr("val: "),
+        )[0]
+
+        val_loss, val_mp, val_mr, val_map50, val_map = validate_single_yolov3_single_cls(accumulated_model, val_loader, None, args=args, device=device, plots=False)
+        print(f"val_loss: {val_loss}, val_mp: {val_mp}, val_mr: {val_mr}, val_map50: {val_map50}, val_map: {val_map}")
+        
     pass
 if __name__ == "__main__":
     args = parse_opt()
