@@ -4,7 +4,7 @@ base_config: /home/liumy/neumeta/toy/experiments/base_config.yaml
 
 experiment:
   name: ninr_yoloface500kp-300e-coordnoise-largers-resmlp
-  num_epochs: 300
+  num_epochs: 400
   log_interval: 5
   seed: 42  # Random seed
 

@@ -41,7 +41,7 @@ import omegaconf
 from utils.downloads import attempt_download, is_url
 
 from smooth.permute import PermutationManager, compute_tv_loss_for_network
-from neumeta.utils import (AverageMeter, EMA, load_checkpoint, print_omegaconf, 
+from neumeta.utils import (AverageMeter, EMA, print_omegaconf, 
                        sample_coordinates, sample_merge_model, 
                        sample_subset, sample_weights, save_checkpoint, 
                        set_seed, shuffle_coordiates_all, sample_single_model,
@@ -109,7 +109,7 @@ def init_model_dict(opt, LOCAL_RANK, device="cpu"):
     for dim in opt.dimensions.range:
         # Create a model for the given dimension
         model_cls = create_model(opt.model.type, LOCAL_RANK, opt, device, hidden_dim=dim, path=opt.model.pretrained_path, change_layers=not None).to(device)
-
+        model_cls.train()
         # Sample the coordinates, keys, indices, and size for the model
         ignored_keys = None
         coords_tensor, keys_list, indices_list, size_list = sample_coordinates(model_cls, ignored_keys=ignored_keys)
@@ -168,7 +168,7 @@ def create_model_yolov3(LOCAL_RANK, device, opt, hyp, hidden_dim=240, path=None,
             model.model[21][1].cv1 = Conv(model.model[21][1].cv1.conv.in_channels, hidden_dim, 1, 1)
             model.model[21][1].cv2 = DWConv(hidden_dim, hidden_dim, 3, 1)
             model.model[21][1].cv3 = Conv(hidden_dim, model.model[21][1].cv3.conv.out_channels, 1, 1)
-        model.model = load_checkpoint(model.model, csd, prefix="model.")  # load
+        model.model = load_checkpoint_mine(model.model, csd, prefix="model.")  # load
         LOGGER.info(f"Transferred {len(csd)}/{len(ckpt['model'].float().state_dict())} items from {weights}")
     else:
         model = Model(opt.cfg, ch=3, nc=1, anchors=hyp.get("anchors")).to(device)  # create
@@ -185,7 +185,7 @@ def create_model_yolov3(LOCAL_RANK, device, opt, hyp, hidden_dim=240, path=None,
     return model
     pass
 
-def load_checkpoint(model, checkpoint, prefix='module.'):
+def load_checkpoint_mine(model, checkpoint, prefix='module.'):
     """
     Load model weights from a checkpoint file. This function handles checkpoints that may contain keys
     that are either redundant, prefixed, or absent in the model's state_dict.
@@ -226,7 +226,7 @@ def load_checkpoint(model, checkpoint, prefix='module.'):
 
     return model
 
-def train_one_epoch_yolov3(model, train_loader, optimizer, criterion, dim_dict, gt_model_dict, epoch_idx, device="cpu", ema=None, args=None, half=True):
+def train_one_epoch_yolov3(model, train_loader, optimizer, criterion, dim_dict, gt_model_dict, epoch_idx, device="cpu", ema=None, args=None, half=True, selected_dim_sum=0):
     # Set the model to training mode
     model.train()
     total_loss = 0.0
@@ -247,6 +247,7 @@ def train_one_epoch_yolov3(model, train_loader, optimizer, criterion, dim_dict, 
         x, target = x.to(device), target.to(device)
         # Choose a random hidden dimension
         hidden_dim = random.choice(args.dimensions.range)
+        selected_dim_sum += hidden_dim
         # Get the model class, coordinates, keys, indices, size, and key mask for the chosen dimension
         model_cls, coords_tensor, keys_list, indices_list, size_list, key_mask = dim_dict[f"{hidden_dim}"]
         # Sample a subset of the coordinates, keys, indices, size, and selected keys
@@ -347,7 +348,8 @@ def train_one_epoch_yolov3(model, train_loader, optimizer, criterion, dim_dict, 
             # Print the losses and learning rate
             print(
                 f"Iteration {batch_idx}: Loss = {losses.avg:.4f}, Reg Loss = {reg_losses.avg:.4f}, Reconstruct Loss = {reconstruct_losses.avg:.4f}, Cls Loss = {cls_losses.avg:.4f}, Learning rate = {optimizer.param_groups[0]['lr']:.4e}")
-    return losses.avg, dim_dict, gt_model_dict
+    selected_dim_sum /= len(train_loader)
+    return losses.avg, dim_dict, gt_model_dict, selected_dim_sum
     pass
 
 def validate_single_yolov3_single_cls(model_cls, val_loader, criterion, conf_thres=0.001, iou_thres=0.60, args=None, device="cpu", plots=False, save_dir=Path(""), augment=False, half=False):
@@ -388,8 +390,10 @@ def validate_single_yolov3_single_cls(model_cls, val_loader, criterion, conf_thr
         
         if isinstance(pred, torch.Tensor):
             pred = pred.detach()
+            # pred = pred.cpu().numpy
         elif isinstance(pred, list):
             pred = [x.detach() for x in pred]
+            # pred = [x.cpu().numpy() for x in pred]
         if compute_loss:
             loss += compute_loss(train_out, targets, args.dynamic_weight)[1]
         

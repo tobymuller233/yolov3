@@ -1,6 +1,6 @@
 # Experiment settings
-# base_config: /home/liumy/neumeta/toy/experiments/base_config.yaml
-base_config: /home/lmy/stu_motion/yolov3/neumeta/config/base_config.yaml
+base_config: /home/liumy/neumeta/toy/experiments/base_config.yaml
+# base_config: /home/lmy/stu_motion/yolov3/neumeta/config/base_config.yaml
 
 experiment:
   name: ninr_yoloface500kp-500-512

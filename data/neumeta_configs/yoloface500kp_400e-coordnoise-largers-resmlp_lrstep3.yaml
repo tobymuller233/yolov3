@@ -3,8 +3,8 @@ base_config: /home/liumy/neumeta/toy/experiments/base_config.yaml
 # base_config: /home/lmy/stu_motion/yolov3/neumeta/config/base_config.yaml
 
 experiment:
-  name: ninr_yoloface500kp-300e-coordnoise-largers-resmlp
-  num_epochs: 300
+  name: ninr_yoloface500kp-300e-coordnoise-largers-resmlp_test2
+  num_epochs: 400
   log_interval: 5
   seed: 42  # Random seed
 
@@ -19,6 +19,7 @@ training:
   learning_rate: 1e-3
   data_path: /local_home/fanggongfan/Datasets/ImageNet/
   # strong_aug: v1
+  lr_steps: [100, 150, 250]
   weight_decay: 1e-2
   coordinate_noise: 1.0
   clip_grad: 10.0
