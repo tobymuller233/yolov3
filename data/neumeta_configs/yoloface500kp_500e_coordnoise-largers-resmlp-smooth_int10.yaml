@@ -1,0 +1,44 @@
+# Experiment settings
+base_config: /home/liumy/neumeta/toy/experiments/base_config.yaml
+# base_config: /home/lmy/stu_motion/yolov3/neumeta/config/base_config.yaml
+
+experiment:
+  name: ninr_yoloface500kp-500e-coordnoise-largers-resmlp-smooth
+  num_epochs: 500
+  log_interval: 5
+  seed: 42  # Random seed
+
+# Model configurations
+model:
+  type: yoloface500kp # Model type
+  pretrained_path: weights/model_plus_final.pt # Path to pre-trained model
+  smooth: True # Use smooth model
+
+# Training configurations
+training:
+  learning_rate: 1e-3
+  data_path: /local_home/fanggongfan/Datasets/ImageNet/
+  # strong_aug: v1
+  lr_steps: [100, 150]
+  weight_decay: 1e-2
+  coordinate_noise: 1.0
+  clip_grad: 10.0
+  save_model_path: toy/experiments/yoloface500kp-500e-smooth # Directory to save the trained model
+
+# Hyper-model specifications (specific to NeRF)
+hyper_model:
+  type: resmlp
+  input_dim: 6
+  hidden_dim: 256
+  num_layers: 4
+  num_freqs: 16
+  output_dim: 9
+  ema_decay: 0.995  # Exponential moving average decay
+
+# Experiment dimensions configuration
+dimensions:
+  range: [160, 320]  # Dimension range for the experiment
+  interval: 10  # Interval between dimensions
+  test: 240  # Testing dimension
+  norm: 240  # Normalization factor
+  start: 240  # Starting dimension

@@ -108,7 +108,7 @@ def init_model_dict(opt, LOCAL_RANK, device="cpu"):
     change_layers = {""}
     for dim in opt.dimensions.range:
         # Create a model for the given dimension
-        model_cls = create_model(opt.model.type, LOCAL_RANK, opt, device, hidden_dim=dim, path=opt.model.pretrained_path, change_layers=not None).to(device)
+        model_cls = create_model(opt.model.type, LOCAL_RANK, opt, device, hidden_dim=dim, path=opt.model.pretrained_path, change_layers=(dim != 240)).to(device)
         model_cls.train()
         # Sample the coordinates, keys, indices, and size for the model
         ignored_keys = None
@@ -117,7 +117,7 @@ def init_model_dict(opt, LOCAL_RANK, device="cpu"):
         dim_dict[f"{dim}"] = (model_cls, coords_tensor, keys_list, indices_list, size_list, None)
         # If the dimension is the starting dimension, add the ground truth model to the dictionary
 
-        if dim == opt.dimensions.start:
+        if dim == opt.dimensions.start and dim == 240:
             print(f"Loading model for dim {dim}")
             model_trained = create_model(opt.model.type, 
                                          LOCAL_RANK,
@@ -125,8 +125,10 @@ def init_model_dict(opt, LOCAL_RANK, device="cpu"):
                                          device,
                                          hidden_dim=dim, 
                                          path=opt.model.pretrained_path, 
-                                         smooth=opt.model.smooth).to(device)
+                                         smooth=opt.model.smooth,
+                                         change_layers=(dim != 240)).to(device)
             model_trained.eval()
+            # model_trained.train()
             
             gt_model_dict[f"{dim}"] = model_trained
     return dim_dict, gt_model_dict
@@ -141,7 +143,7 @@ def create_model(model_name, LOCAL_RANK, opt, device, hidden_dim=240, path=None,
     return model
 
 # the modified model of yoloface500kp.yaml
-def create_model_yolov3(LOCAL_RANK, device, opt, hyp, hidden_dim=240, path=None, smooth=None, change_layers=None):
+def create_model_yolov3(LOCAL_RANK, device, opt, hyp, hidden_dim=240, path=None, smooth=None, change_layers=False):
     """
     Create a model based on the specified name.
 
@@ -165,7 +167,10 @@ def create_model_yolov3(LOCAL_RANK, device, opt, hyp, hidden_dim=240, path=None,
         # csd = intersect_dicts(csd, model.state_dict(), exclude=exclude)  # intersect
         # model.load_state_dict(csd, strict=False)  # load
         if change_layers:
-            model.model[21][1].cv1 = Conv(model.model[21][1].cv1.conv.in_channels, hidden_dim, 1, 1)
+            model.model[21][0].cv1 = Conv(model.model[21][0].cv1.conv.in_channels, hidden_dim, 1, 1)
+            model.model[21][0].cv2 = DWConv(hidden_dim, hidden_dim, 3, 1)
+            model.model[21][0].cv3 = Conv(hidden_dim, model.model[21][1].cv3.conv.out_channels, 1, 1)
+            model.model[21][1].cv1 = Conv(model.model[21][0].cv1.conv.in_channels, hidden_dim, 1, 1)
             model.model[21][1].cv2 = DWConv(hidden_dim, hidden_dim, 3, 1)
             model.model[21][1].cv3 = Conv(hidden_dim, model.model[21][1].cv3.conv.out_channels, 1, 1)
         model.model = load_checkpoint_mine(model.model, csd, prefix="model.")  # load
@@ -176,8 +181,8 @@ def create_model_yolov3(LOCAL_RANK, device, opt, hyp, hidden_dim=240, path=None,
     if smooth:
         print("Smooth the parameters of the model")
         print("TV original model: ", compute_tv_loss_for_network(model.model, lambda_tv=1.0).item())
-        input_tensor = torch.randn(1, 3, 640, 640)
-        permute_func = PermutationManager(model.model, input_tensor)
+        input_tensor = torch.randn(1, 3, 640, 640).to(device)
+        permute_func = PermutationManager(model, input_tensor)
         permute_dict = permute_func.compute_permute_dict()
         model = permute_func.apply_permutations(permute_dict, ignored_keys=[('conv1.weight', 'in_channels'), ('fc.weight', 'out_channels'), ('fc.bias', 'out_channels')])
         print("TV original model: ", compute_tv_loss_for_network(model.model, lambda_tv=1.0).item())
@@ -262,6 +267,8 @@ def train_one_epoch_yolov3(model, train_loader, optimizer, criterion, dim_dict, 
         if hasattr(args.training, 'coordinate_noise') and args.training.coordinate_noise > 0.0:
             coords_tensor = coords_tensor + (torch.rand_like(coords_tensor) - 0.5) * args.training.coordinate_noise
         # Sample the weights for the model
+        if hidden_dim == 240:
+            print()
         model_cls, reconstructed_weights = sample_weights(model, model_cls,
                                                           coords_tensor, keys_list, indices_list, size_list, key_mask, selected_keys,
                                                           device=device, NORM=args.dimensions.norm)
@@ -376,6 +383,11 @@ def validate_single_yolov3_single_cls(model_cls, val_loader, criterion, conf_thr
 
     jdict, stats, ap, ap_class = [], [], [], []
     
+    # path_str = args.data_path.join(", ")
+    if hasattr(args, "data_path"):
+        path_str = ", ".join(args.data_path)
+        print(f"Validating model on images from" + path_str)
+        
     pbar = tqdm(val_loader, desc=s, bar_format="{l_bar}{bar:10}{r_bar}")
     for batch_i, (im, targets, paths, shapes) in enumerate(pbar):
         with dt[0]:

@@ -446,7 +446,7 @@ class Concat(nn.Module):
 class DetectMultiBackend(nn.Module):
     """YOLOv3 multi-backend class for inference on frameworks like PyTorch, ONNX, TensorRT, and more."""
 
-    def __init__(self, weights="yolov5s.pt", device=torch.device("cpu"), dnn=False, data=None, fp16=False, fuse=True):
+    def __init__(self, weights="yolov5s.pt", device=torch.device("cpu"), dnn=False, data=None, fp16=False, fuse=True, change_layer=None):
         """Initializes multi-backend detection with options for various frameworks and devices, also handles model
         download.
         """
@@ -474,7 +474,7 @@ class DetectMultiBackend(nn.Module):
         if not (pt or triton):
             w = attempt_download(w)  # download if not local
         if pt:  # PyTorch
-            model = attempt_load(weights if isinstance(weights, list) else w, device=device, inplace=True, fuse=fuse)
+            model = attempt_load(weights if isinstance(weights, list) else w, device=device, inplace=True, fuse=fuse, change_layer=change_layer)
             stride = max(int(model.stride.max()), 16)  # model stride
             names = model.module.names if hasattr(model, "module") else model.names  # get class names
             model.half() if fp16 else model.float()

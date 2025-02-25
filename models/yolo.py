@@ -141,7 +141,7 @@ class BaseModel(nn.Module):
     def _forward_once(self, x, profile=False, visualize=False):
         """Executes a single inference or training step, offering profiling and visualization options for input `x`."""
         y, dt = [], []  # outputs
-        # i = 0
+        i = 0
         # fp = open("log3.txt", "w")
         for m in self.model:
             if m.f != -1:  # if not from previous layer
@@ -157,7 +157,7 @@ class BaseModel(nn.Module):
             #         print(f"NaN detected! {m._get_name()}")   # output module name
             # if not isinstance(x, tuple):
             #     fp.write(f"Layer {i}: {x.shape}\n")
-            # i += 1
+            i += 1
             y.append(x if m.i in self.save else None)  # save output
             if visualize:
                 feature_visualization(x, m.type, m.i, save_dir=visualize)
@@ -208,7 +208,7 @@ class BaseModel(nn.Module):
 class DetectionModel(BaseModel):
     """YOLOv3 detection model class for initializing and processing detection models with configurable parameters."""
 
-    def __init__(self, cfg="yolov5s.yaml", ch=3, nc=None, anchors=None, log=True, inr=False, change_layers=None):  # model, input channels, number of classes
+    def __init__(self, cfg="yolov5s.yaml", ch=3, nc=None, anchors=None, log=True, inr=False, change_layers=False):  # model, input channels, number of classes
         """Initializes YOLOv3 detection model with configurable YAML, input channels, classes, and anchors."""
         """
         :param cfg: model dict or *.yaml file path
@@ -237,7 +237,7 @@ class DetectionModel(BaseModel):
         if anchors:
             LOGGER.info(f"Overriding model.yaml anchors with anchors={anchors}")
             self.yaml["anchors"] = round(anchors)  # override yaml value
-        self.model, self.save = parse_model(deepcopy(self.yaml), ch=[ch], log=log, inr=inr, change_layers=change_layers)  # model, savelist
+        self.model, self.save = parse_model(deepcopy(self.yaml), ch=[ch], log=log and (not change_layers), inr=inr, change_layers=change_layers)  # model, savelist
         self.names = [str(i) for i in range(self.yaml["nc"])]  # default names
         self.inplace = self.yaml.get("inplace", True)
 
@@ -325,7 +325,7 @@ class DetectionModel(BaseModel):
     
     @property
     def learnable_parameter(self):
-        self.keys = [k for k, v in self.model.named_parameters() if k.startswith(f'21.1.')]
+        self.keys = [k for k, v in self.model.named_parameters() if k.startswith(f'21.')]
         return {k: v for k, v in self.model.state_dict().items() if k in self.keys}
         # self.keys = [k for k, w in self.named_parameters() if k.startswith(f'layer3.{self.layers[-1]-1}') ] # or k.startswith('layer3.1') or k.startswith('layer3.0')
 

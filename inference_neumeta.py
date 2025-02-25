@@ -55,7 +55,7 @@ def parse_opt():
     parser.add_argument("--test-model", action="store_true", default=False, help="test model")
 
     # if test
-    parser.add_argument("--data-path", type=str, default=ROOT / "datasets/SCUT_HEAD_A/val/images", help="data path")
+    parser.add_argument("--data-path", type=str, nargs="+", default=[ROOT / "datasets/SCUT_HEAD_A/test/images", ROOT / "datasets/SCUT_HEAD_B/val/images"], help="data path")
     parser.add_argument("--imgsz", "--img", "--imgs", type=int, default=640, help="inference size (pixels)")
     parser.add_argument("--batch-size", type=int, default=1, help="batch size")
     parser.add_argument("--label-smoothing", default=True, help="label smoothing")
@@ -83,11 +83,16 @@ def create_model_yolov3(path, device, args, hidden_dim=240, change_layers=False)
     model = Model(args.cfg, ch=3, nc=1, anchors=3, change_layers=change_layers).to(device)
     csd = ckpt["model"].float().state_dict()
     if change_layers:
+        model.model[21][0].cv1 = Conv(model.model[21][0].cv1.conv.in_channels, hidden_dim, 1, 1)
+        model.model[21][0].cv2 = DWConv(hidden_dim, hidden_dim, 3, 1)
+        model.model[21][0].cv3 = Conv(hidden_dim, model.model[21][0].cv3.conv.out_channels, 1, 1)
         model.model[21][1].cv1 = Conv(model.model[21][1].cv1.conv.in_channels, hidden_dim, 1, 1)
         model.model[21][1].cv2 = DWConv(hidden_dim, hidden_dim, 3, 1)
         model.model[21][1].cv3 = Conv(hidden_dim, model.model[21][1].cv3.conv.out_channels, 1, 1)
     model.model = load_checkpoint_mine(model.model, csd, prefix="model.")    # load
+    model.names = {0: 'head'}
     return model
+
 
 def main(args):
     device = select_device("cuda:0", 1)
@@ -102,14 +107,20 @@ def main(args):
     # create model for given dimension
     model_cls = create_model_yolov3(args.weights, device, args, hidden_dim=int(240 * args.ratio), change_layers=True)
     accumulated_model = sample_merge_model(hypernet, model_cls, args)
+    # csd = torch.load("toy/test.pt", map_location="cpu")
+    # accumulated_model = load_checkpoint_mine(accumulated_model, csd, prefix="model.")    # load
     if args.save:
         # mkdir
         os.makedirs(args.save_path, exist_ok=True)
         
-        save_path = os.path.join(args.save_path, f"{args.experiment.name}_{args.ratio}.pth")
+        save_path = os.path.join(args.save_path, f"gen_{args.experiment.name}_{args.ratio}.pth")
         torch.save(accumulated_model.state_dict(), save_path)
     
     if args.test_model:
+        if len(args.data_path) > 1:
+            args.data_path = [str(p) for p in args.data_path]
+        else:
+            args.data_path = [str(args.data_path)]
         val_path = args.data_path
         imgsz = args.imgsz
         batch_size = args.batch_size

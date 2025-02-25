@@ -143,7 +143,8 @@ def train_neumeta(hyp, opt, device, callbacks): # hyp is path/to/hyp.yaml or hyp
         data_dict = loggers.remote_dataset
 
     # get model_cls
-    model_cls = create_model_yolov3(LOCAL_RANK, device, opt, hyp, path=opt.model.pretrained_path, smooth=opt.model.smooth)
+    # hidden_dim = dimension start
+    model_cls = create_model_yolov3(LOCAL_RANK, device, opt, hyp, path=opt.model.pretrained_path, smooth=opt.model.smooth, hidden_dim=opt.dimensions.start, change_layers=(opt.dimensions.start != 240))
     amp = check_amp(model_cls)  # check AMP
     # Image size
     gs = max(int(model_cls.stride.max()), 32)  # grid size (max stride)
@@ -447,8 +448,6 @@ def parse_opt(known=False):
 
 
 def main(opt, callbacks=Callbacks()):
-    # set random seed
-    set_seed(opt.experiment.seed)
     
     if RANK in {-1, 0}:
         print_args(vars(opt))
@@ -495,6 +494,9 @@ def main(opt, callbacks=Callbacks()):
         device = torch.device("cuda", LOCAL_RANK)
         dist.init_process_group(backend="nccl" if dist.is_nccl_available() else "gloo")
 
+    # set random seed
+    set_seed(opt.experiment.seed)
+    
     # Train
 
     if not opt.evolve:

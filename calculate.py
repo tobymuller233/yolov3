@@ -91,15 +91,24 @@ from neumeta.utils import (AverageMeter, EMA, load_checkpoint, print_omegaconf,
                        weighted_regression_loss)
 from omegaconf import OmegaConf
 
-m = torch.load("weights/model_plus_final.pt")
-model = m['model']
+# m = torch.load("weights/model_plus_final.pt")
+# model = m['model']
+
+model = torch.load("toy/neumeta_test/gen_ninr_yoloface500kp-500e-coordnoise-largers-resmlp-dim150-240_0.005.pth")
+model_org = torch.load("toy/neumeta_test/gen_ninr_yoloface500kp-500e-coordnoise-largers-resmlp-dim150-240_1.0.pth")
 
 
-total_params = sum(p.numel() for p in model.parameters())
+total_params = sum(p.numel() for p in model.values())
 print("Total parameters:" + str(total_params))
+filter_params = sum(p.numel() for k, p in model.items() if k.startswith("model.21.1."))
+print("Filter parameters:" + str(filter_params))
+total_params_org = sum(p.numel() for p in model_org.values())
+print("Total parameters org:" + str(total_params_org))
+filter_params_org = sum(p.numel() for k, p in model_org.items() if k.startswith("model.21.1."))
+print("Filter parameters org:" + str(filter_params_org))
 
-layer_params = sum(p.numel() for p in model.model[21][1].parameters())
-print("Layer parameters:" + str(layer_params))
+# layer_params = sum(p.numel() for p in model.model[21][1].parameters())
+# print("Layer parameters:" + str(layer_params))
 
 
 

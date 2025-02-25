@@ -91,7 +91,7 @@ class Ensemble(nn.ModuleList):
         return y, None  # inference, train output
 
 
-def attempt_load(weights, device=None, inplace=True, fuse=True):
+def attempt_load(weights, device=None, inplace=True, fuse=True, change_layer=None):
     """Loads an ensemble or single model weights, supports device placement and model fusion."""
     from models.yolo import Detect, Model
 
