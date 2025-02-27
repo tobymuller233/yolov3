@@ -94,7 +94,7 @@ from omegaconf import OmegaConf
 # m = torch.load("weights/model_plus_final.pt")
 # model = m['model']
 
-model = torch.load("toy/neumeta_test/gen_ninr_yoloface500kp-500e-coordnoise-largers-resmlp-dim150-240_0.005.pth")
+model = torch.load("toy/neumeta_test/gen_ninr_v2_yoloface500kp-500e-coordnoise-largers-resmlp-dim150-240_0.5.pth")
 model_org = torch.load("toy/neumeta_test/gen_ninr_yoloface500kp-500e-coordnoise-largers-resmlp-dim150-240_1.0.pth")
 
 
