@@ -4,3 +4,5 @@
 device 选择??
 the best is test2
 
+ninr/exp8是SCUT_HEAD_B_indoor finetune
+ninr/exp10是SCUT_HEAD_B_indoor scratch

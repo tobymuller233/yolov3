@@ -471,7 +471,7 @@ def train(hyp, opt, device, callbacks):  # hyp is path/to/hyp.yaml or hyp dictio
             #     print()
             with torch.cuda.amp.autocast(amp):
                 pred = model(imgs)  # forward
-                loss, loss_items = compute_loss(pred, targets.to(device), opt.dynamic_weight)  # loss scaled by batch_size
+                loss, loss_items = compute_loss(pred, targets.to(device), opt.dynamic_weight, opt.big_penalty)  # loss scaled by batch_size
                 if RANK != -1:
                     loss *= WORLD_SIZE  # gradient averaged between devices in DDP mode
                 if opt.quad:
@@ -669,6 +669,7 @@ def parse_opt(known=False):
     parser.add_argument("--local_rank", type=int, default=-1, help="Automatic DDP Multi-GPU argument, do not modify")
     parser.add_argument("--sparse", type=str, default=None, help="Sparse weights for training.(group for GroupNorm, batch for BN)")
     parser.add_argument("--dynamic-weight", action="store_true", help="Dynamic weight in computing loss")
+    parser.add_argument("--big-penalty", action="store_true", help="Big penalty in computing loss")
 
     # Logger arguments
     parser.add_argument("--entity", default=None, help="Entity")

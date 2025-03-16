@@ -28,19 +28,19 @@ except ImportError:
         return None  # None = SummaryWriter(str)
 
 
-try:
-    import wandb
+# try:
+#     import wandb
 
-    assert hasattr(wandb, "__version__")  # verify package import not local dir
-    if pkg.parse_version(wandb.__version__) >= pkg.parse_version("0.12.2") and RANK in {0, -1}:
-        try:
-            wandb_login_success = wandb.login(timeout=30)
-        except wandb.errors.UsageError:  # known non-TTY terminal issue
-            wandb_login_success = False
-        if not wandb_login_success:
-            wandb = None
-except (ImportError, AssertionError):
-    wandb = None
+#     assert hasattr(wandb, "__version__")  # verify package import not local dir
+#     if pkg.parse_version(wandb.__version__) >= pkg.parse_version("0.12.2") and RANK in {0, -1}:
+#         try:
+#             wandb_login_success = wandb.login(timeout=30)
+#         except wandb.errors.UsageError:  # known non-TTY terminal issue
+#             wandb_login_success = False
+#         if not wandb_login_success:
+#             wandb = None
+# except (ImportError, AssertionError):
+#     wandb = None
 
 try:
     import clearml
@@ -65,7 +65,7 @@ except (ImportError, AssertionError):
 class Loggers:
     """Manages logging for training and validation using TensorBoard, Weights & Biases, ClearML, and Comet ML."""
 
-    def __init__(self, save_dir=None, weights=None, opt=None, hyp=None, logger=None, include=LOGGERS):
+    def __init__(self, save_dir=None, weights=None, opt=None, hyp=None, logger=None, include=LOGGERS, use_wandb=False):
         """Initializes YOLOv3 logging with directory, weights, options, hyperparameters, and includes specified
         loggers.
         """
@@ -109,9 +109,25 @@ class Loggers:
             self.tb = SummaryWriter(str(s))
 
         # W&B
-        if wandb and "wandb" in self.include:
-            self.opt.hyp = self.hyp  # add hyperparameters
-            self.wandb = WandbLogger(self.opt)
+        if use_wandb and "wandb" in self.include:
+            try:
+                import wandb
+
+                assert hasattr(wandb, "__version__")  # verify package import not local dir
+                if pkg.parse_version(wandb.__version__) >= pkg.parse_version("0.12.2") and RANK in {0, -1}:
+                    try:
+                        wandb_login_success = wandb.login(timeout=30)
+                    except wandb.errors.UsageError:  # known non-TTY terminal issue
+                        wandb_login_success = False
+                    if not wandb_login_success:
+                        wandb = None
+            except (ImportError, AssertionError):
+                wandb = None
+            if not wandb:
+                self.opt.hyp = self.hyp  # add hyperparameters
+                self.wandb = WandbLogger(self.opt)
+            else:
+                self.wandb = None
         else:
             self.wandb = None
 
