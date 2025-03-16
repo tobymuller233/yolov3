@@ -188,7 +188,7 @@ def train(hyp, opt, device, callbacks):  # hyp is path/to/hyp.yaml or hyp dictio
     # Loggers
     data_dict = None
     if RANK in {-1, 0}:
-        loggers = Loggers(save_dir, weights, opt, hyp, LOGGER)  # loggers instance
+        loggers = Loggers(save_dir, weights, opt, hyp, LOGGER, use_wandb=opt.use_wandb)  # loggers instance
 
         # Register actions
         for k in methods(loggers):
@@ -670,6 +670,9 @@ def parse_opt(known=False):
     parser.add_argument("--sparse", type=str, default=None, help="Sparse weights for training.(group for GroupNorm, batch for BN)")
     parser.add_argument("--dynamic-weight", action="store_true", help="Dynamic weight in computing loss")
     parser.add_argument("--big-penalty", action="store_true", help="Big penalty in computing loss")
+
+    # wandb
+    parser.add_argument("--use-wandb", action="store_true", help="Use wandb for logging")
 
     # Logger arguments
     parser.add_argument("--entity", default=None, help="Entity")
