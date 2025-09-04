@@ -422,8 +422,8 @@ def train(hyp, opt, device, callbacks):  # hyp is path/to/hyp.yaml or hyp dictio
         if opt.sparse:
             pruner.update_regularizer()
 
-        if opt.sparse:
-            pruner.update_regularizer()
+        # if opt.sparse:
+        #     pruner.update_regularizer()
         # Update image weights (optional, single-GPU only)
         if opt.image_weights:
             cw = model.class_weights.cpu().numpy() * (1 - maps) ** 2 / nc  # class weights

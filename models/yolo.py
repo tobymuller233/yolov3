@@ -222,6 +222,7 @@ class DetectionModel(BaseModel):
         super().__init__()
         if isinstance(cfg, dict):
             self.yaml = cfg  # model dict
+            self.yaml_file = "custom_config"  # set default name for dict config
         else:  # is *.yaml
             import yaml  # for torch hub
 
@@ -408,7 +409,9 @@ def parse_model(d, ch, log=True, inr=False, change_layers=None):  # model_dict, 
             nn.ConvTranspose2d,
             DWConvTranspose2d,
             C3x,
-            Bottleneck3
+            Bottleneck3,
+            MobileOneBlock,
+            MobileOneStage
         }:
             c1, c2 = ch[f], args[0]
             if c2 != no:  # if not output

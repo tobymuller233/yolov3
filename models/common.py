@@ -57,7 +57,8 @@ def autopad(k, p=None, d=1):  # kernel, padding, dilation
 class Conv(nn.Module):
     """A standard Conv2D layer with batch normalization and optional activation for neural networks."""
 
-    default_act = nn.ReLU()  # default activation
+    # default_act = nn.ReLU()  # default activation
+    default_act = nn.SiLU()  # default activation
 
     def __init__(self, c1, c2, k=1, s=1, p=None, g=1, d=1, act=True):
         """Initializes a standard Conv2D layer with batch normalization and optional activation; args are channel_in,
@@ -1104,3 +1105,151 @@ class Bottleneck3(nn.Module):
         x.
         """
         return x + self.cv3(self.cv2(self.cv1(x))) if self.add else self.cv3(self.cv2(self.cv1(x)))
+
+
+class MobileOneBlock(nn.Module):
+    """MobileOne block with reparameterization for efficient inference."""
+    
+    def __init__(self, c1, c2, k=3, s=1, num_conv_branches=1):
+        """Initialize MobileOne block.
+        Args:
+            c1: input channels
+            c2: output channels  
+            k: kernel size
+            s: stride
+            num_conv_branches: number of conv branches for reparameterization
+        """
+        super().__init__()
+        self.c1 = c1
+        self.c2 = c2
+        self.k = k
+        self.s = s
+        self.num_conv_branches = num_conv_branches
+        self.padding = (k - 1) // 2
+        
+        # Re-parameterizable skip connection
+        self.rbr_skip = nn.BatchNorm2d(c1) if c1 == c2 and s == 1 else None
+        
+        # Re-parameterizable conv branches
+        self.rbr_conv = nn.ModuleList()
+        for _ in range(self.num_conv_branches):
+            self.rbr_conv.append(self._conv_bn(c1, c2, k, s, self.padding))
+            
+        # Re-parameterizable scale branch
+        self.rbr_scale = None
+        if k > 1:
+            self.rbr_scale = self._conv_bn(c1, c2, 1, s, 0)
+            
+    def _conv_bn(self, c1, c2, k, s, p):
+        """Helper function to create conv + bn layer."""
+        result = nn.Sequential()
+        result.add_module('conv', nn.Conv2d(c1, c2, k, s, p, bias=False))
+        result.add_module('bn', nn.BatchNorm2d(c2))
+        return result
+        
+    def forward(self, x):
+        """Forward pass through MobileOne block."""
+        if self.rbr_scale is not None:
+            scale_out = self.rbr_scale(x)
+        else:
+            scale_out = 0
+            
+        if self.rbr_skip is not None:
+            skip_out = self.rbr_skip(x)
+        else:
+            skip_out = 0
+            
+        conv_out = 0
+        for ix in range(self.num_conv_branches):
+            conv_out += self.rbr_conv[ix](x)
+            
+        return scale_out + skip_out + conv_out
+        
+    def reparameterize(self):
+        """Reparameterize the block for inference."""
+        if self.rbr_skip is not None:
+            kernel, bias = self._get_kernel_bias()
+            self.reparam_conv = nn.Conv2d(self.c1, self.c2, self.k, self.s, self.padding, bias=True)
+            self.reparam_conv.weight.data = kernel
+            self.reparam_conv.bias.data = bias
+            self.__delattr__('rbr_conv')
+            self.__delattr__('rbr_scale')
+            self.__delattr__('rbr_skip')
+            
+    def _get_kernel_bias(self):
+        """Get kernel and bias for reparameterization."""
+        # Get kernel and bias from scale branch
+        kernel_scale = 0
+        bias_scale = 0
+        if self.rbr_scale is not None:
+            kernel_scale, bias_scale = self._fuse_bn_tensor(self.rbr_scale)
+            
+        # Get kernel and bias from skip branch
+        kernel_skip = 0
+        bias_skip = 0
+        if self.rbr_skip is not None:
+            kernel_skip, bias_skip = self._fuse_bn_tensor(self.rbr_skip)
+            
+        # Get kernel and bias from conv branches
+        kernel_conv = 0
+        bias_conv = 0
+        for ix in range(self.num_conv_branches):
+            _kernel, _bias = self._fuse_bn_tensor(self.rbr_conv[ix])
+            kernel_conv += _kernel
+            bias_conv += _bias
+            
+        return kernel_scale + kernel_skip + kernel_conv, bias_scale + bias_skip + bias_conv
+        
+    def _fuse_bn_tensor(self, branch):
+        """Fuse conv and bn tensors."""
+        if branch is None:
+            return 0, 0
+        if isinstance(branch, nn.Sequential):
+            kernel = branch.conv.weight
+            running_mean = branch.bn.running_mean
+            running_var = branch.bn.running_var
+            gamma = branch.bn.weight
+            beta = branch.bn.bias
+            eps = branch.bn.eps
+        else:
+            assert isinstance(branch, nn.BatchNorm2d)
+            if not hasattr(self, 'id_tensor'):
+                input_dim = self.c1 // self.rbr_conv[0].conv.groups
+                kernel_value = torch.zeros((self.c1, input_dim, self.k, self.k), dtype=branch.weight.dtype, device=branch.weight.device)
+                for i in range(self.c1):
+                    kernel_value[i, i % input_dim, self.k // 2, self.k // 2] = 1
+                self.id_tensor = kernel_value
+            kernel = self.id_tensor
+            running_mean = branch.running_mean
+            running_var = branch.running_var
+            gamma = branch.weight
+            beta = branch.bias
+            eps = branch.eps
+        std = (running_var + eps).sqrt()
+        t = (gamma / std).reshape(-1, 1, 1, 1)
+        return kernel * t, beta - running_mean * gamma / std
+
+
+class MobileOneStage(nn.Module):
+    """MobileOne stage with multiple MobileOne blocks."""
+    
+    def __init__(self, c1, c2, num_blocks, k=3, s=1, num_conv_branches=1):
+        """Initialize MobileOne stage.
+        Args:
+            c1: input channels
+            c2: output channels
+            num_blocks: number of MobileOne blocks
+            k: kernel size
+            s: stride
+            num_conv_branches: number of conv branches for reparameterization
+        """
+        super().__init__()
+        self.blocks = nn.ModuleList()
+        for i in range(num_blocks):
+            self.blocks.append(MobileOneBlock(c1 if i == 0 else c2, c2, k, s if i == 0 else 1, num_conv_branches))
+            
+    def forward(self, x):
+        """Forward pass through MobileOne stage."""
+        for block in self.blocks:
+            x = block(x)
+        return x
