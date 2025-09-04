@@ -3,7 +3,7 @@
 # Target: ~500K parameters similar to yoloface-500k
 # MobileOne features: reparameterization, multi-branch training, single-branch inference
 
-nc: 3 # number of classes (head, front, back)
+nc: 1 # number of classes (head, front, back)
 depth_multiple: 1.0 # model depth multiple
 width_multiple: 1.0 # layer channel multiple
 anchors:

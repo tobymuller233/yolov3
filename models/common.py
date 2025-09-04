@@ -1143,12 +1143,17 @@ class MobileOneBlock(nn.Module):
     def _conv_bn(self, c1, c2, k, s, p):
         """Helper function to create conv + bn layer."""
         result = nn.Sequential()
-        result.add_module('conv', nn.Conv2d(c1, c2, k, s, p, bias=False))
+        result.add_module('conv', nn.Conv2d(c1, c2, k, s, autopad(k, p, 1), bias=False))
         result.add_module('bn', nn.BatchNorm2d(c2))
         return result
         
     def forward(self, x):
         """Forward pass through MobileOne block."""
+        # Use reparameterized convolution if available
+        if hasattr(self, 'reparam_conv'):
+            return self.reparam_conv(x)
+        
+        # Original multi-branch forward pass (for training)
         if self.rbr_scale is not None:
             scale_out = self.rbr_scale(x)
         else:
@@ -1167,14 +1172,23 @@ class MobileOneBlock(nn.Module):
         
     def reparameterize(self):
         """Reparameterize the block for inference."""
-        if self.rbr_skip is not None:
+        if not hasattr(self, 'reparam_conv'):
             kernel, bias = self._get_kernel_bias()
             self.reparam_conv = nn.Conv2d(self.c1, self.c2, self.k, self.s, self.padding, bias=True)
             self.reparam_conv.weight.data = kernel
             self.reparam_conv.bias.data = bias
-            self.__delattr__('rbr_conv')
-            self.__delattr__('rbr_scale')
-            self.__delattr__('rbr_skip')
+            
+            # Remove original branches
+            if hasattr(self, 'rbr_conv'):
+                delattr(self, 'rbr_conv')
+            if hasattr(self, 'rbr_scale'):
+                delattr(self, 'rbr_scale')
+            if hasattr(self, 'rbr_skip'):
+                delattr(self, 'rbr_skip')
+                
+    def forward_reparam(self, x):
+        """Forward pass using reparameterized convolution."""
+        return self.reparam_conv(x)
             
     def _get_kernel_bias(self):
         """Get kernel and bias for reparameterization."""

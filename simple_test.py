@@ -7,6 +7,7 @@ import torch
 import yaml
 import sys
 import os
+from models.mobileone import reparameterize_model
 
 # Add the project root to Python path
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
@@ -49,7 +50,7 @@ def calculate_flops(model, input_size=(1, 3, 320, 320)):
         print(f"Error calculating FLOPs: {e}")
         return None, None, None, None
 
-def estimate_inference_time(model, input_size=(1, 3, 320, 320), num_runs=100):
+def estimate_inference_time(model, input_size=(1, 3, 368, 640), num_runs=100):
     """Estimate inference time."""
     model.eval()
     
@@ -59,7 +60,7 @@ def estimate_inference_time(model, input_size=(1, 3, 320, 320), num_runs=100):
     
     # Create input tensor on the same device as model
     dummy_input = torch.randn(input_size, device=device)
-    
+    model = reparameterize_model(model)
     # Warmup
     with torch.no_grad():
         for _ in range(10):
@@ -98,6 +99,7 @@ def test_config():
         
         # Load configuration
         config_path = "models/yolo-mobileone-500k.yaml"
+        # config_path = "models/yoloface-500kp-layer21-dim120-3class.yaml"
         # config_path = "models/yoloface-500k.yaml"
         print(f"Loading configuration from: {config_path}")
         

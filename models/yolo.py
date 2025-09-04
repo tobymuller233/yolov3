@@ -186,6 +186,9 @@ class BaseModel(nn.Module):
                 m.conv = fuse_conv_and_bn(m.conv, m.bn)  # update conv
                 delattr(m, "bn")  # remove batchnorm
                 m.forward = m.forward_fuse  # update forward
+            # Note: MobileOne reparameterization should be called manually after model is fully loaded
+            # if hasattr(m, "reparameterize"):
+            #     m.reparameterize()
         self.info()
         return self
 
@@ -324,6 +327,18 @@ class DetectionModel(BaseModel):
             )  # cls
             mi.bias = torch.nn.Parameter(b.view(-1), requires_grad=True)
     
+    def reparameterize_mobileone(self):
+        """Reparameterize all MobileOne blocks in the model for efficient inference."""
+        def _reparameterize_module(module):
+            if hasattr(module, 'reparameterize'):
+                module.reparameterize()
+            for child in module.children():
+                _reparameterize_module(child)
+        
+        print("Reparameterizing MobileOne blocks for inference...")
+        _reparameterize_module(self.model)
+        print("✓ Reparameterization completed!")
+        
     @property
     def learnable_parameter(self):
         self.keys = [k for k, v in self.model.named_parameters() if k.startswith(f'21.1.')]
