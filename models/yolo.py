@@ -426,7 +426,8 @@ def parse_model(d, ch, log=True, inr=False, change_layers=None):  # model_dict, 
             C3x,
             Bottleneck3,
             MobileOneBlock,
-            MobileOneStage
+            MobileOneStage,
+            MobileBottleneck,
         }:
             c1, c2 = ch[f], args[0]
             if c2 != no:  # if not output

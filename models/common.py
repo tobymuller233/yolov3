@@ -22,6 +22,7 @@ import torch.nn as nn
 from PIL import Image
 from torch.cuda import amp
 from ultralytics.utils.plotting import Annotator, colors, save_one_box
+import torch.nn.functional as F
 
 from utils import TryExcept
 from utils.dataloaders import exif_transpose, letterbox
@@ -383,6 +384,8 @@ class GhostBottleneck(nn.Module):
         )
 
     def forward(self, x):
+        if self.conv[2].cv2.conv.out_channels == 9:
+            print()
         """Performs a forward pass through the network, returning the sum of convolution and shortcut outputs."""
         return self.conv(x) + self.shortcut(x)
 
@@ -1267,3 +1270,82 @@ class MobileOneStage(nn.Module):
         for block in self.blocks:
             x = block(x)
         return x
+
+
+class Hswish(nn.Module):
+    """Hard Swish activation function used in MobileNetV3."""
+    def __init__(self, inplace=True):
+        super(Hswish, self).__init__()
+        self.inplace = inplace
+
+    def forward(self, x):
+        return x * F.relu6(x + 3., inplace=self.inplace) / 6.
+
+
+class Hsigmoid(nn.Module):
+    """Hard Sigmoid activation function used in MobileNetV3."""
+    def __init__(self, inplace=True):
+        super(Hsigmoid, self).__init__()
+        self.inplace = inplace
+
+    def forward(self, x):
+        return F.relu6(x + 3., inplace=self.inplace) / 6.
+
+
+class SEModule(nn.Module):
+    """Squeeze-and-Excitation module used in MobileNetV3."""
+    def __init__(self, channel, reduction=4):
+        super(SEModule, self).__init__()
+        self.avg_pool = nn.AdaptiveAvgPool2d(1)
+        self.fc = nn.Sequential(
+            nn.Linear(channel, channel // reduction, bias=False),
+            nn.ReLU(inplace=True),
+            nn.Linear(channel // reduction, channel, bias=False),
+            Hsigmoid()
+        )
+
+    def forward(self, x):
+        b, c, _, _ = x.size()
+        y = self.avg_pool(x).view(b, c)
+        y = self.fc(y).view(b, c, 1, 1)
+        return x * y.expand_as(x)
+
+
+class MobileBottleneck(nn.Module):
+    """MobileNetV3 bottleneck block with SE module and different activations."""
+    def __init__(self, c1, c2, k=3, s=1, exp=24, se=False, nl='RE'):
+        super(MobileBottleneck, self).__init__()
+        assert s in [1, 2]
+
+        assert k in [3, 5]
+        padding = (k - 1) // 2
+        self.use_res_connect = s == 1 and c1 == c2
+
+        if nl == 'RE':
+            nlin_layer = nn.ReLU
+        elif nl == 'HS':
+            nlin_layer = Hswish
+        else:
+            raise NotImplementedError
+            
+        if se:
+            SELayer = SEModule
+        else:
+            SELayer = nn.Identity
+
+        self.conv = nn.Sequential(
+            # pw
+            Conv(c1, exp, 1, 1, act=nlin_layer),
+            # dw
+            DWConv(exp, exp, k, s, act=False),
+            SELayer(exp) if se else nn.Identity(),
+            nlin_layer(inplace=True) if not se else nn.Identity(),
+            # pw-linear
+            Conv(exp, c2, 1, 1, act=False),
+        )
+
+    def forward(self, x):
+        if self.use_res_connect:
+            return x + self.conv(x)
+        else:
+            return self.conv(x)

@@ -180,3 +180,4 @@ if __name__ == "__main__":
             print("\n⚠ Demo completed with warnings")
     else:
         print("\n💥 Demo failed!")
+

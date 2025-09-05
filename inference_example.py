@@ -58,3 +58,4 @@ def inference_example():
 
 if __name__ == "__main__":
     inference_example()
+

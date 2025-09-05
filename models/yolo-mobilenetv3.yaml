@@ -1,0 +1,66 @@
+# YOLOv3 with MobileNetV3 Small backbone
+# Based on MobileNetV3 architecture for efficient feature extraction
+# Optimized for lightweight detection with SE modules and Hard Swish activation
+
+nc: 3  # number of classes (head, front, back)
+depth_multiple: 1.0  # model depth multiple
+width_multiple: 1.0  # layer channel multiple
+
+# Anchors optimized for face detection
+anchors:
+  - [4, 6, 7, 10, 11, 15]
+  - [16, 24, 33, 25, 26, 41]
+  - [47, 60, 83, 97, 141, 149]
+
+# MobileNetV3 Small backbone
+backbone:
+  # [from, number, module, args]
+  # args: out_channels, kernel_size, stride, expansion, se, activation
+  [
+    [-1, 1, Conv, [16, 3, 2]],  # 0  [batch, 16, size/2, size/2] - Initial conv with Hswish
+    
+    # MobileNetV3 Small blocks
+    [-1, 1, MobileBottleneck, [16, 3, 2, 16, True, 'RE']],  # 1 size/4 - k=3, exp=16, c=16, se=True, nl=RE, s=2
+    [-1, 1, MobileBottleneck, [24, 3, 1, 72, False, 'RE']], # 2 - k=3, exp=72, c=24, se=False, nl=RE, s=2
+    [-1, 1, MobileBottleneck, [24, 3, 1, 88, False, 'RE']], # 3 - k=3, exp=88, c=24, se=False, nl=RE, s=1
+    
+    [-1, 1, MobileBottleneck, [40, 5, 2, 96, True, 'HS']],  # 4 size/8 - k=5, exp=96, c=40, se=True, nl=HS, s=2
+    [-1, 1, MobileBottleneck, [40, 5, 1, 240, True, 'HS']], # 5 - k=5, exp=240, c=40, se=True, nl=HS, s=1
+    [-1, 1, MobileBottleneck, [40, 5, 1, 240, True, 'HS']], # 6 - k=5, exp=240, c=40, se=True, nl=HS, s=1
+    
+    [-1, 1, MobileBottleneck, [48, 5, 1, 120, True, 'HS']], # 7 - k=5, exp=120, c=48, se=True, nl=HS, s=1
+    [-1, 1, MobileBottleneck, [48, 5, 1, 144, True, 'HS']], # 8 - k=5, exp=144, c=48, se=True, nl=HS, s=1
+    
+    [-1, 1, MobileBottleneck, [96, 5, 2, 288, True, 'HS']], # 9 size/16 - k=5, exp=288, c=96, se=True, nl=HS, s=2
+    [-1, 1, MobileBottleneck, [96, 5, 1, 576, True, 'HS']], # 10 - k=5, exp=576, c=96, se=True, nl=HS, s=1
+    [-1, 1, MobileBottleneck, [96, 5, 1, 576, True, 'HS']], # 11 - k=5, exp=576, c=96, se=True, nl=HS, s=1
+    
+    # Additional layers for detection
+    [-1, 1, Conv, [192, 1, 1]], # 12 - Channel expansion for detection
+    [-1, 1, Conv, [96, 1, 1]],  # 13 - Final backbone output
+  ]
+
+# YOLO detection head with feature fusion
+head:
+  [
+    [-1, 1, Conv, [64, 1, 1]], # 14 - Feature fusion from size/16
+    [[-1, 9], 1, Concat, [1]], # 15 - Concat with layer 8 (144 channels total)
+    
+    [-1, 1, Conv, [48, 1, 1]], # 16 - Channel reduction
+    [-1, 1, Conv, [48, 3, 1]], # 17 - Feature processing
+    [-1, 1, Conv, [18, 1, 1]], # 18 - Output layer for size/8
+    
+    [-1, 1, nn.Upsample, [None, 2, "nearest"]],  # 19 - Upsample to size/8
+    [[-1, 4], 1, Concat, [1]],  # 20 - Concat with layer 5 (88 channels total)
+    [-1, 1, Conv, [32, 1, 1]], # 21 - Channel reduction
+    [-1, 1, Conv, [32, 3, 1]], # 22 - Feature processing
+    [-1, 1, Conv, [18, 1, 1]], # 23 - Output layer for size/4
+    
+    [-1, 1, nn.Upsample, [None, 2, "nearest"]],  # 24 - Upsample to size/4
+    [[-1, 1], 1, Concat, [1]],  # 25 - Concat with layer 2 (40 channels total)
+    [-1, 1, Conv, [24, 1, 1]], # 26 - Channel reduction
+    [-1, 1, Conv, [24, 3, 1]], # 27 - Feature processing
+    [-1, 1, Conv, [18, 1, 1]], # 28 - Output layer for size/4
+    
+    [[28, 23, 18], 1, Detect, [nc, anchors]], # 29 - Detection head (size/4, size/8, size/16)
+  ]
